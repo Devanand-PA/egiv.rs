@@ -56,7 +56,12 @@ jobs:
 
       - name: Install dav1d build tools (Windows)
         if: runner.os == 'Windows'
-        run: pip install meson ninja
+        shell: pwsh
+        run: |
+          pip install meson ninja
+          # dav1d-sys's vendored build reads the generated dav1d.pc through
+          # pkg-config; pkgconfiglite provides that binary on Windows.
+          choco install pkgconfiglite -y --no-progress
 
       # macOS runner images ship a homebrew dav1d; if pkg-config finds it, it
       # gets linked dynamically and the released binary would fail on machines
