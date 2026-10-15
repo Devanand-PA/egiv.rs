@@ -62,11 +62,13 @@ jobs:
           # dav1d-sys's vendored build reads the generated dav1d.pc through
           # pkg-config; pkgconfiglite provides that binary on Windows.
           choco install pkgconfiglite -y --no-progress
-          # meson defaults to the MinGW gcc on PATH, producing objects that
-          # MSVC's link.exe cannot link (___chkstk_ms, __mingw_vfprintf).
-          # Force the MSVC compiler so the static dav1d matches the CRT of
-          # the Rust MSVC toolchain; meson activates the VS env itself.
-          Add-Content -Path $env:GITHUB_ENV -Value 'CC=cl'
+
+      # Put cl.exe (with INCLUDE/LIB) on PATH so meson compiles vendored
+      # dav1d with MSVC instead of the MinGW gcc on PATH - MinGW objects
+      # cannot be linked by the Rust MSVC toolchain (___chkstk_ms etc.).
+      - name: Set up MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       # macOS runner images ship a homebrew dav1d; if pkg-config finds it, it
       # gets linked dynamically and the released binary would fail on machines
