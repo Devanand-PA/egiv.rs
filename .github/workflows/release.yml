@@ -19,11 +19,11 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -42,16 +42,26 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cross-linker (aarch64 Linux)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      # The image crate's `avif-native` feature needs libdav1d at build time.
+      # meson/ninja/nasm let dav1d-sys build a pinned, static dav1d from source
+      # (via SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=auto below), so the released
+      # binaries are self-contained and don't depend on a system libdav1d.
+      - name: Install dav1d build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y meson ninja-build nasm
+
+      - name: Install dav1d build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install meson ninja nasm
+
+      - name: Install dav1d build tools (Windows)
+        if: runner.os == 'Windows'
+        run: pip install meson ninja
 
       - name: Build binary
         shell: bash
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: auto
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (tar.gz)
