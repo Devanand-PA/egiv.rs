@@ -19,11 +19,14 @@
 //! attribute is silently ignored — this then becomes a no-op.
 
 use eframe::CreationContext;
+
+#[cfg(unix)]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 /// Returns the screen dimensions (w, h) when the X11 dialog property was
 /// set successfully; `None` on Wayland / when libX11 is unavailable / when
 /// the window must not float anyway.
+#[cfg(unix)]
 pub fn setup_dialog(cc: &CreationContext<'_>) -> Option<(f32, f32)> {
     let handle = cc.window_handle().ok()?.as_raw();
     let window = match handle {
@@ -34,10 +37,18 @@ pub fn setup_dialog(cc: &CreationContext<'_>) -> Option<(f32, f32)> {
     unsafe { set_dialog_type(window) }
 }
 
+/// No X11 window-type hints outside unix — `_NET_WM_WINDOW_TYPE` doesn't
+/// exist on Windows/macOS, matching Tk where the attribute is ignored.
+#[cfg(not(unix))]
+pub fn setup_dialog(_cc: &CreationContext<'_>) -> Option<(f32, f32)> {
+    None
+}
+
 /// Writes `_NET_WM_WINDOW_TYPE = _NET_WM_WINDOW_TYPE_DIALOG` on `window`
 /// and returns the default screen size.  A separate (short-lived) Xlib
 /// display connection is used; property changes are server-side state so
 /// they are visible to the window manager immediately.
+#[cfg(unix)]
 unsafe fn set_dialog_type(window: u64) -> Option<(f32, f32)> {
     let xlib = x11_dl::xlib::Xlib::open().ok()?;
     let dpy = (xlib.XOpenDisplay)(std::ptr::null());

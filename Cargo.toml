@@ -27,6 +27,10 @@ walkdir = "2"
 sha1 = "0.10"
 libvips = { version = "2.3", optional = true }
 raw-window-handle = "0.6"
+
+[target.'cfg(unix)'.dependencies]
+# X11 window-type hints (floating/dialog windows); unix-only because
+# x11-dl uses dlopen(3), which libc on Windows does not provide.
 x11-dl = "2"
 
 [profile.release]
