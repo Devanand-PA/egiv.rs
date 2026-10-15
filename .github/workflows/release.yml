@@ -40,7 +40,7 @@ jobs:
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.target }}-v2
 
       # The image crate's `avif-native` feature needs libdav1d at build time.
       # meson/ninja/nasm let dav1d-sys build a pinned, static dav1d from source
@@ -62,6 +62,11 @@ jobs:
           # dav1d-sys's vendored build reads the generated dav1d.pc through
           # pkg-config; pkgconfiglite provides that binary on Windows.
           choco install pkgconfiglite -y --no-progress
+          # meson defaults to the MinGW gcc on PATH, producing objects that
+          # MSVC's link.exe cannot link (___chkstk_ms, __mingw_vfprintf).
+          # Force the MSVC compiler so the static dav1d matches the CRT of
+          # the Rust MSVC toolchain; meson activates the VS env itself.
+          Add-Content -Path $env:GITHUB_ENV -Value 'CC=cl'
 
       # macOS runner images ship a homebrew dav1d; if pkg-config finds it, it
       # gets linked dynamically and the released binary would fail on machines
