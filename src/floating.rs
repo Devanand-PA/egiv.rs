@@ -31,7 +31,7 @@ pub fn setup_dialog(cc: &CreationContext<'_>) -> Option<(f32, f32)> {
     let handle = cc.window_handle().ok()?.as_raw();
     let window = match handle {
         RawWindowHandle::Xcb(h) => h.window.get() as u64,
-        RawWindowHandle::Xlib(h) => h.window as u64,
+        RawWindowHandle::Xlib(h) => h.window,
         _ => return None,
     };
     unsafe { set_dialog_type(window) }
@@ -55,17 +55,13 @@ unsafe fn set_dialog_type(window: u64) -> Option<(f32, f32)> {
     if dpy.is_null() {
         return None;
     }
-    let wm_type = (xlib.XInternAtom)(
-        dpy,
-        b"_NET_WM_WINDOW_TYPE\0".as_ptr().cast(),
-        x11_dl::xlib::False,
-    );
+    let wm_type = (xlib.XInternAtom)(dpy, c"_NET_WM_WINDOW_TYPE".as_ptr(), x11_dl::xlib::False);
     let dialog = (xlib.XInternAtom)(
         dpy,
-        b"_NET_WM_WINDOW_TYPE_DIALOG\0".as_ptr().cast(),
+        c"_NET_WM_WINDOW_TYPE_DIALOG".as_ptr(),
         x11_dl::xlib::False,
     );
-    let atom = (xlib.XInternAtom)(dpy, b"ATOM\0".as_ptr().cast(), x11_dl::xlib::False);
+    let atom = (xlib.XInternAtom)(dpy, c"ATOM".as_ptr(), x11_dl::xlib::False);
     if wm_type != 0 && dialog != 0 && atom != 0 {
         // XChangeProperty with format=32 expects `long` elements, so the
         // data must be an array of u64 on LP64 platforms.

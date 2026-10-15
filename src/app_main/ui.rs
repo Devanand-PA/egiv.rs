@@ -390,6 +390,51 @@ impl App {
                 self.held.remove(&key_name);
                 continue;
             }
+            // Image mode: Ctrl+plus/equals/minus/0 zoom the image (the same
+            // steps as the mouse wheel and the app's default tkiv bindings)
+            // instead of egui's UI-font zoom.  egui applies that UI zoom at
+            // the end of the pass by consuming these very shortcuts, so
+            // consuming them here first - on the initial press AND on every
+            // synthetic auto-repeat - shadows it completely.  Gallery and
+            // list modes don't consume, so Ctrl+plus there still scales the
+            // UI like in a browser.
+            if self.mode == Mode::Image
+                && (modifiers.ctrl || modifiers.mac_cmd)
+                && matches!(key, Key::Plus | Key::Equals | Key::Minus | Key::Num0)
+            {
+                let action = match key {
+                    Key::Plus | Key::Equals => Action::ZoomIn,
+                    Key::Minus => Action::ZoomOut,
+                    _ => Action::Zoom100,
+                };
+                // Consume the egui UI-zoom shortcut matching this key press
+                // (modifiers match logically: shift/alt extras are ignored,
+                // exactly like egui's own end-pass handling).
+                ctx.input_mut(|i| {
+                    i.consume_shortcut(&egui::KeyboardShortcut::new(
+                        egui::Modifiers::COMMAND,
+                        key,
+                    ));
+                });
+                if !repeat {
+                    self.run_action(action, ctx, win);
+                    // Ctrl+plus/minus behave like their unmodified
+                    // counterparts and repeat while held (the zoom keys are
+                    // repeatable actions in the tkiv keymap).
+                    if REPEATABLE.contains(&action) {
+                        self.held.insert(
+                            key_name.clone(),
+                            HeldKey {
+                                key,
+                                what: HeldWhat::Act(action),
+                                interval: repeat_every,
+                                next_fire: Instant::now() + repeat_every,
+                            },
+                        );
+                    }
+                }
+                continue;
+            }
             // Synthetic auto-repeat events are ignored: repetition is
             // driven by our own hold timers (tkiv.py's after() chain),
             // which start right after the first press instead of waiting
