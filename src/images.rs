@@ -7,6 +7,8 @@ use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, DynamicImage, RgbaImage};
 use sha1::{Digest, Sha1};
 use std::path::PathBuf;
+
+#[cfg(feature = "vips")]
 use std::sync::OnceLock;
 
 use crate::model::DEF_ANIM_DELAY_MS;
@@ -15,10 +17,13 @@ pub type Frames = (Vec<RgbaImage>, Vec<u32>); // frames + per-frame delay in ms
 
 // libvips gives us the same fast loading path and broad codec coverage as
 // tkiv.py's pyvips branch (including PCX/XPM/JPEG2000/HEIC/HEIF when the
-// host libvips supports them).  It is optional at runtime: if libvips cannot
-// initialize we keep the pure-Rust image crate fallback.
+// host libvips supports them).  It is optional: behind the `vips` cargo
+// feature at build time, and if libvips cannot initialize at runtime we
+// keep the pure-Rust image crate fallback.
+#[cfg(feature = "vips")]
 static VIPS_READY: OnceLock<bool> = OnceLock::new();
 
+#[cfg(feature = "vips")]
 fn vips_enabled() -> bool {
     *VIPS_READY.get_or_init(|| {
         match libvips::VipsApp::new("tkiv", false) {
@@ -33,6 +38,7 @@ fn vips_enabled() -> bool {
     })
 }
 
+#[cfg(feature = "vips")]
 fn vips_to_rgba(mut v: libvips::VipsImage) -> Result<RgbaImage, String> {
     if v.get_format().ok().map(|f| f as i32) != Some(0) {
         v = libvips::ops::cast(&v, libvips::ops::BandFormat::Uchar).map_err(|e| e.to_string())?;
@@ -65,6 +71,7 @@ fn vips_to_rgba(mut v: libvips::VipsImage) -> Result<RgbaImage, String> {
     Ok(out)
 }
 
+#[cfg(feature = "vips")]
 fn vips_frame(path: &str, max_dim: Option<u32>) -> Result<RgbaImage, String> {
     let mut v =
         libvips::VipsImage::new_from_file_access(path, libvips::ops::Access::Sequential, false)
@@ -79,6 +86,7 @@ fn vips_frame(path: &str, max_dim: Option<u32>) -> Result<RgbaImage, String> {
     vips_to_rgba(v)
 }
 
+#[cfg(feature = "vips")]
 fn vips_thumbnail(path: &str, max_w: u32, max_h: u32) -> Result<RgbaImage, String> {
     let mut v = libvips::ops::thumbnail(path, max_w.max(1) as i32).map_err(|e| e.to_string())?;
     if v.get_height() > max_h as i32 {
@@ -107,6 +115,7 @@ pub fn load_frames(path: &str, max_dim: Option<u32>) -> Result<Frames, String> {
             return Ok(res);
         }
     }
+    #[cfg(feature = "vips")]
     if vips_enabled() {
         if let Ok(img) = vips_frame(path, max_dim) {
             return Ok((vec![img], vec![DEF_ANIM_DELAY_MS]));
@@ -196,6 +205,7 @@ fn load_apng_frames(path: &str, max_dim: Option<u32>) -> Result<Frames, String> 
 
 /// Gallery thumbnail: decode + fit within (max_w, max_h), RGBA.
 pub fn load_gallery_thumb(path: &str, max_w: u32, max_h: u32) -> Result<RgbaImage, String> {
+    #[cfg(feature = "vips")]
     if vips_enabled() {
         if let Ok(img) = vips_thumbnail(path, max_w, max_h) {
             return Ok(img);
@@ -210,8 +220,18 @@ pub fn load_gallery_thumb(path: &str, max_w: u32, max_h: u32) -> Result<RgbaImag
     ))
 }
 
+fn fallback_thumb(path: &str, max_w: u32, max_h: u32) -> Option<RgbaImage> {
+    let img = image::open(path).ok()?;
+    Some(image::imageops::thumbnail(
+        &img.to_rgba8(),
+        max_w.max(1),
+        max_h.max(1),
+    ))
+}
+
 /// (width, height) without decoding pixels.
 pub fn get_orig_size(path: &str) -> (u32, u32) {
+    #[cfg(feature = "vips")]
     if vips_enabled() {
         if let Ok(v) =
             libvips::VipsImage::new_from_file_access(path, libvips::ops::Access::Sequential, false)
@@ -277,18 +297,18 @@ pub fn decode_thumb(path: &str, max_w: u32, max_h: u32) -> Option<(RgbaImage, (u
         }
     }
 
+    #[cfg(feature = "vips")]
     let thumb = if vips_enabled() {
         match vips_thumbnail(path, max_w, max_h) {
             Ok(t) => t,
-            Err(_) => {
-                let img = image::open(path).ok()?;
-                image::imageops::thumbnail(&img.to_rgba8(), max_w.max(1), max_h.max(1))
-            }
+            Err(_) => fallback_thumb(path, max_w, max_h)?,
         }
     } else {
-        let img = image::open(path).ok()?;
-        image::imageops::thumbnail(&img.to_rgba8(), max_w.max(1), max_h.max(1))
+        fallback_thumb(path, max_w, max_h)?
     };
+
+    #[cfg(not(feature = "vips"))]
+    let thumb = fallback_thumb(path, max_w, max_h)?;
 
     if let Some(cf) = &cache_file {
         if let Some(parent) = cf.parent() {

@@ -17,6 +17,30 @@ tkiv is a terminal-based image viewer and selector that allows you to browse and
 cargo build --release
 ```
 
+### Optional libvips accelerator
+
+By default tkiv builds with the `vips` feature, which uses libvips to speed up
+loading and thumbnailing of large images (and adds codec coverage like
+HEIC/JPEG2000 when the host libvips supports them). This requires the libvips
+and glib development packages at build time, and the libraries at runtime:
+
+```bash
+# Debian/Ubuntu
+sudo apt install libvips-dev
+# macOS
+brew install vips
+```
+
+If you don't need it, build without it — the pure-Rust `image` fallback is
+used instead:
+
+```bash
+cargo build --release --no-default-features
+```
+
+Prebuilt release binaries are built with `--no-default-features` so they have
+no libvips/glib runtime dependency.
+
 ## Running
 
 ```bash

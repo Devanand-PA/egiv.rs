@@ -12,13 +12,20 @@ path = "src/lib.rs"
 name = "tkiv"
 path = "src/main.rs"
 
+[features]
+default = ["vips"]
+# Optional libvips accelerated loader.  The pure-Rust `image` fallback covers
+# everything libvips does; vips only speeds up large-image decoding and adds
+# a runtime dependency on libvips/glib (and needs the dev packages to build).
+vips = ["dep:libvips"]
+
 [dependencies]
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
 egui = "0.31"
 image = { version = "0.25", features = ["gif", "png", "jpeg", "webp", "bmp", "ico", "tga", "tiff", "pnm", "avif-native", "qoi"] }
 walkdir = "2"
 sha1 = "0.10"
-libvips = "2.3"
+libvips = { version = "2.3", optional = true }
 raw-window-handle = "0.6"
 x11-dl = "2"
 

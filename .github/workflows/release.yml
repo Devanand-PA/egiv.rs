@@ -58,11 +58,24 @@ jobs:
         if: runner.os == 'Windows'
         run: pip install meson ninja
 
+      # macOS runner images ship a homebrew dav1d; if pkg-config finds it, it
+      # gets linked dynamically and the released binary would fail on machines
+      # without it.  Hide the system .pc files so dav1d-sys falls back to its
+      # vendored build (static, pinned to dav1d 1.5.0) instead.
+      - name: Force vendored static dav1d (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty-pc"
+          echo "PKG_CONFIG_LIBDIR=$RUNNER_TEMP/empty-pc" >> "$GITHUB_ENV"
+
+      # Release binaries are built without the optional libvips accelerated
+      # loader (feature "vips") so they have no runtime dependency on
+      # libvips/glib.  Build from source with --features vips to enable it.
       - name: Build binary
         shell: bash
         env:
           SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: auto
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features
 
       - name: Package (tar.gz)
         if: runner.os != 'Windows'
