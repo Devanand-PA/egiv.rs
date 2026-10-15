@@ -85,12 +85,13 @@ jobs:
       # libvips/glib.  Build from source with --features vips to enable it.
       # pwsh (not bash!) on Windows: a Git Bash shell prepends /usr/bin to
       # PATH, where coreutils 'link' shadows MSVC's link.exe, which rustc
-      # picks up once INCLUDE/LIB are set by msvc-dev-cmd.
+      # picks up once INCLUDE/LIB are set by msvc-dev-cmd.  Note: shell:
+      # cannot use the runner context, hence matrix.os.
       - name: Build binary
-        shell: ${{ runner.os == 'Windows' && 'pwsh' || 'bash' }}
+        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
         env:
           SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: auto
-          CC: ${{ runner.os == 'Windows' && 'cl' || 'cc' }}
+          CC: ${{ matrix.os == 'windows-latest' && 'cl' || 'cc' }}
         run: cargo build --release --target ${{ matrix.target }} --no-default-features
 
       - name: Package (tar.gz)
