@@ -1,0 +1,10 @@
+/home/devanandpa/Test_Programs/tkiv/target/release/deps/wayland_client-be3ee5ac22038e5a.d: /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/lib.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/conn.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/event_queue.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/globals.rs
+
+/home/devanandpa/Test_Programs/tkiv/target/release/deps/libwayland_client-be3ee5ac22038e5a.rlib: /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/lib.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/conn.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/event_queue.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/globals.rs
+
+/home/devanandpa/Test_Programs/tkiv/target/release/deps/libwayland_client-be3ee5ac22038e5a.rmeta: /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/lib.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/conn.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/event_queue.rs /home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/globals.rs
+
+/home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/lib.rs:
+/home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/conn.rs:
+/home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/event_queue.rs:
+/home/devanandpa/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wayland-client-0.31.15/src/globals.rs:

@@ -1,0 +1,29 @@
+[package]
+name = "tkiv"
+version = "0.4.0"
+edition = "2021"
+description = "Combined image viewer (nsxiv-like) and image selector (dmenu-like) — Rust port of tkiv.py"
+
+[lib]
+name = "tkiv_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tkiv"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+egui = "0.31"
+image = { version = "0.25", features = ["gif", "png", "jpeg", "webp", "bmp", "ico", "tga", "tiff", "pnm", "avif-native", "qoi"] }
+walkdir = "2"
+sha1 = "0.10"
+libvips = "2.3"
+raw-window-handle = "0.6"
+x11-dl = "2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
