@@ -1,0 +1,96 @@
+name: Build and Release tkiv
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            arch: x86_64
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            arch: x86_64
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            arch: aarch64
+            target: aarch64-apple-darwin
+          - os: ubuntu-latest
+            arch: x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            arch: aarch64
+            target: aarch64-unknown-linux-gnu
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          toolchain: stable
+
+      - name: Build binary
+        uses: actions-rs/cargo@v1
+        with:
+          build: --release --target ${{ matrix.target }}
+          package: tkiv
+
+      - name: Package binary
+        run: |
+          mkdir -p release
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            cp target/${{ matrix.target }}/release/tkiv.exe release/
+            cd release && zip -j tkiv-${GITHUB_REF_NAME}-windows-x86_64.zip tkiv.exe
+          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
+            cp target/${{ matrix.target }}/release/tkiv release/tkiv-${{ matrix.arch }}.tar.gz
+            cd release && tar -czf tkiv-${GITHUB_REF_NAME}-${{ matrix.arch }}.tar.gz tkiv
+          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            cp target/${{ matrix.target }}/release/tkiv release/tkiv-${{ matrix.arch }}.tar.gz
+            cd release && tar -czf tkiv-${GITHUB_REF_NAME}-${{ matrix.arch }}.tar.gz tkiv
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tkiv-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/*
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List downloaded artifacts
+        run: |
+          find ./artifacts -type f | sort
+
+      - name: Create GitHub Release and upload assets
+        uses: softprops/action-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            Release tkiv for Windows, macOS, and Linux.
+          do_not_redirect_auth: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
