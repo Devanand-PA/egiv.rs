@@ -86,12 +86,20 @@ jobs:
       # pwsh (not bash!) on Windows: a Git Bash shell prepends /usr/bin to
       # PATH, where coreutils 'link' shadows MSVC's link.exe, which rustc
       # picks up once INCLUDE/LIB are set by msvc-dev-cmd.  Note: shell:
-      # cannot use the runner context, hence matrix.os.
-      - name: Build binary
-        shell: ${{ matrix.os == 'windows-latest' && 'pwsh' || 'bash' }}
+      # supports no dynamic contexts here, hence two static steps.
+      - name: Build binary (unix)
+        if: runner.os != 'Windows'
+        shell: bash
         env:
           SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: auto
-          CC: ${{ matrix.os == 'windows-latest' && 'cl' || 'cc' }}
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: auto
+          CC: cl
         run: cargo build --release --target ${{ matrix.target }} --no-default-features
 
       - name: Package (tar.gz)
