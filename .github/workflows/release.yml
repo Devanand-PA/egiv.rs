@@ -6,65 +6,72 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    name: Build for ${{ matrix.os }}-${{ matrix.arch }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows
-            arch: x86_64
-            target: x86_64-pc-windows-msvc
-          - os: macos-latest
-            arch: x86_64
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            arch: aarch64
-            target: aarch64-apple-darwin
           - os: ubuntu-latest
-            arch: x86_64
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
-            arch: aarch64
             target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
-          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Set up Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross-linker (aarch64 Linux)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build binary
-        uses: actions-rs/cargo@v1
-        with:
-          build: --release --target ${{ matrix.target }}
-          package: tkiv
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
         run: |
-          mkdir -p release
-          if [ "${{ matrix.os }}" = "windows" ]; then
-            cp target/${{ matrix.target }}/release/tkiv.exe release/
-            cd release && zip -j tkiv-${GITHUB_REF_NAME}-windows-x86_64.zip tkiv.exe
-          elif [ "${{ matrix.os }}" = "macos-latest" ]; then
-            cp target/${{ matrix.target }}/release/tkiv release/tkiv-${{ matrix.arch }}.tar.gz
-            cd release && tar -czf tkiv-${GITHUB_REF_NAME}-${{ matrix.arch }}.tar.gz tkiv
-          elif [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            cp target/${{ matrix.target }}/release/tkiv release/tkiv-${{ matrix.arch }}.tar.gz
-            cd release && tar -czf tkiv-${GITHUB_REF_NAME}-${{ matrix.arch }}.tar.gz tkiv
-          fi
+          cd target/${{ matrix.target }}/release
+          tar czf "$GITHUB_WORKSPACE/tkiv-${{ matrix.target }}.tar.gz" tkiv
+
+      - name: Package (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/tkiv.exe -DestinationPath tkiv-${{ matrix.target }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tkiv-${{ matrix.os }}-${{ matrix.arch }}
-          path: release/*
+          name: tkiv-${{ matrix.target }}
+          path: tkiv-*
+          if-no-files-found: error
 
   release:
     name: Create GitHub Release
@@ -72,25 +79,15 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
-
-      - name: List downloaded artifacts
-        run: |
-          find ./artifacts -type f | sort
+          path: dist
+          merge-multiple: true
 
       - name: Create GitHub Release and upload assets
-        uses: softprops/action-release@v2
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          body: |
-            Release tkiv for Windows, macOS, and Linux.
-          do_not_redirect_auth: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: tkiv ${{ github.ref_name }}
+          files: dist/*
+          generate_release_notes: true
