@@ -2,16 +2,48 @@ name: Build and Release egiv
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+    branches: [ main ]
 
 permissions:
   contents: write
 
 jobs:
+  version-check:
+    name: Check version change
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version-output.outputs.version }}
+      changed: ${{ steps.changed-output.outputs.changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need parent commit
+      - name: Extract version from Cargo.toml
+        id: version-output
+        run: |
+          VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      - name: Check if version changed vs parent commit
+        id: changed-output
+        run: |
+          # Get Cargo.toml from parent commit
+          if git show HEAD~1:Cargo.toml 2>/dev/null | grep -q "^version ="; then
+            PREV_VERSION=$(git show HEAD~1:Cargo.toml | grep -m1 '^version =' | cut -d'"' -f2)
+          else
+            PREV_VERSION=""
+          fi
+          CURRENT_VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
+          if [[ "$CURRENT_VERSION" != "$PREV_VERSION" ]]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: version-check
+    if: ${{ needs.version-check.outputs.changed == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,7 +59,6 @@ jobs:
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -123,9 +154,9 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [version-check, build]
+    if: ${{ needs.version-check.outputs.changed == 'true' }}
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -136,6 +167,7 @@ jobs:
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          name: egiv ${{ github.ref_name }}
+          tag_name: v${{ needs.version-check.outputs.version }}
+          name: egiv v${{ needs.version-check.outputs.version }}
           files: dist/*
           generate_release_notes: true
