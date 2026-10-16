@@ -430,7 +430,18 @@ impl App {
                 // otherwise ramp the image zoom to its limit within a few
                 // hundred ms, leaving a flat magnified crop on screen.
                 if !repeat {
-                    self.run_action(action, ctx, win);
+                    if self.mode == Mode::Image {
+                        // Applied inside render_image through the very same
+                        // act_zoom call the mouse wheel uses, with the same
+                        // viewport metrics and the same point in the frame.
+                        self.pending_key_zoom = match action {
+                            Action::ZoomIn => Some(1),
+                            Action::ZoomOut => Some(-1),
+                            _ => Some(0),
+                        };
+                    } else {
+                        self.run_action(action, ctx, win);
+                    }
                 }
                 continue;
             }
@@ -590,6 +601,16 @@ impl App {
                 } else if x > rect.width() - third {
                     self.nav_visible(1);
                 }
+            }
+        }
+        // Keyboard zoom (Ctrl+plus/minus/0) goes through the very same
+        // act_zoom call as the mouse wheel, at the same point in the frame.
+        if let Some(d) = self.pending_key_zoom.take() {
+            if d == 0 {
+                self.scale_mode = ScaleMode::Zoom;
+                self.zoom_to(1.0, avail);
+            } else {
+                self.act_zoom(d, ui.ctx(), avail);
             }
         }
         let wheel = ui.input(|i| i.raw_scroll_delta.y);
@@ -794,6 +815,19 @@ impl App {
                         ui.set_width(list_w);
                         ui.spacing_mut().item_spacing.y = 2.0;
                         ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                            // Rows highlight only when actually selected: a
+                            // parked mouse pointer over the list otherwise
+                            // paints egui's hover fill as a phantom extra
+                            // 'selection' on whatever row it happens to sit
+                            // on (e.g. the first entry right after switching
+                            // here from gallery mode).
+                            {
+                                let v = ui.visuals_mut();
+                                let inactive = v.widgets.inactive.fg_stroke;
+                                v.widgets.hovered.weak_bg_fill = Color32::TRANSPARENT;
+                                v.widgets.hovered.bg_fill = Color32::TRANSPARENT;
+                                v.widgets.hovered.fg_stroke = inactive;
+                            }
                             for pos in 0..self.visible.len() {
                                 let idx = self.visible[pos];
                                 let f = &self.files[idx];

@@ -141,6 +141,9 @@ pub struct App {
     keymap_direct: Vec<(Binding, Action, bool)>,
 
     pending_pan: Option<(f32, f32)>,
+    /// Image-mode zoom step requested by Ctrl+plus/minus, applied inside
+    /// render_image through the same act_zoom call the mouse wheel uses.
+    pending_key_zoom: Option<i64>,
     /// Keys currently held whose actions auto-repeat, mirroring tkiv.py's
     /// hold timers (tkiv.py schedules an after() chain per held binding;
     /// OS auto-repeat events are swallowed in both implementations).
@@ -330,6 +333,7 @@ impl App {
             keymap,
             keymap_direct,
             pending_pan: None,
+            pending_key_zoom: None,
             held: HashMap::new(),
             pending_show,
             pending_geometry,

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 pub const PROGNAME: &str = "tkiv";
-pub const VERSION: &str = "0.4.0";
+pub const VERSION: &str = "0.4.1";
 
 pub const SLIDESHOW_DELAY: i64 = 5; // seconds
 pub const MAX_LOAD_DIM: i64 = 4096;
