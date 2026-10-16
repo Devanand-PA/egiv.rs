@@ -1148,8 +1148,17 @@ impl App {
                 }
             }
             Action::Zoom100 => {
-                self.scale_mode = ScaleMode::Zoom;
-                self.zoom_to(1.0, win);
+                if self.mode == Mode::Gallery {
+                    // Reset the gallery thumbnails to their automatic size.
+                    if self.gallery_tile_override.take().is_some() {
+                        self.thumbs.clear();
+                        self.thumb_in_flight.clear();
+                    }
+                    self.gallery_scroll_to = Some(self.fileidx);
+                } else if self.mode == Mode::Image {
+                    self.scale_mode = ScaleMode::Zoom;
+                    self.zoom_to(1.0, win);
+                }
             }
             Action::ZoomIn => self.act_zoom(1, ctx, win),
             Action::ZoomOut => self.act_zoom(-1, ctx, win),

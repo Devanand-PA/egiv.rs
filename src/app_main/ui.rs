@@ -390,16 +390,15 @@ impl App {
                 self.held.remove(&key_name);
                 continue;
             }
-            // Image mode: Ctrl+plus/equals/minus/0 zoom the image (the same
-            // steps as the mouse wheel and the app's default tkiv bindings)
-            // instead of egui's UI-font zoom.  egui applies that UI zoom at
-            // the end of the pass by consuming these very shortcuts, so
-            // consuming them here first - on the initial press AND on every
-            // synthetic auto-repeat - shadows it completely.  Gallery and
-            // list modes don't consume, so Ctrl+plus there still scales the
-            // UI like in a browser.
-            if self.mode == Mode::Image
-                && (modifiers.ctrl || modifiers.mac_cmd)
+            // Ctrl+plus/equals/minus/0 zoom the IMAGES, never the UI, in
+            // every mode: image mode steps the picture through the same
+            // levels as the mouse wheel, gallery mode resizes the thumbnails
+            // (act_zoom's gallery branch), and list mode ignores it.  egui
+            // would scale the whole UI at the end of the pass by consuming
+            // these very shortcuts, so they are consumed here first - on the
+            // initial press AND on every synthetic auto-repeat - which
+            // shadows that completely.
+            if (modifiers.ctrl || modifiers.mac_cmd)
                 && matches!(key, Key::Plus | Key::Equals | Key::Minus | Key::Num0)
             {
                 let action = match key {
@@ -416,22 +415,12 @@ impl App {
                         key,
                     ));
                 });
+                // One step per press, like one wheel notch.  The held-key
+                // repeat is deliberately not armed here: a held chord would
+                // otherwise ramp the image zoom to its limit within a few
+                // hundred ms, leaving a flat magnified crop on screen.
                 if !repeat {
                     self.run_action(action, ctx, win);
-                    // Ctrl+plus/minus behave like their unmodified
-                    // counterparts and repeat while held (the zoom keys are
-                    // repeatable actions in the tkiv keymap).
-                    if REPEATABLE.contains(&action) {
-                        self.held.insert(
-                            key_name.clone(),
-                            HeldKey {
-                                key,
-                                what: HeldWhat::Act(action),
-                                interval: repeat_every,
-                                next_fire: Instant::now() + repeat_every,
-                            },
-                        );
-                    }
                 }
                 continue;
             }
