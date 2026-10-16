@@ -1,4 +1,4 @@
-name: Build and Release tkiv
+name: Build and Release egiv
 
 on:
   push:
@@ -107,18 +107,18 @@ jobs:
         shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf "$GITHUB_WORKSPACE/tkiv-${{ matrix.target }}.tar.gz" tkiv
+          tar czf "$GITHUB_WORKSPACE/egiv-${{ matrix.target }}.tar.gz" egiv
 
       - name: Package (zip)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/tkiv.exe -DestinationPath tkiv-${{ matrix.target }}.zip
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/egiv.exe -DestinationPath egiv-${{ matrix.target }}.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tkiv-${{ matrix.target }}
-          path: tkiv-*
+          name: egiv-${{ matrix.target }}
+          path: egiv-*
           if-no-files-found: error
 
   release:
@@ -136,6 +136,6 @@ jobs:
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          name: tkiv ${{ github.ref_name }}
+          name: egiv ${{ github.ref_name }}
           files: dist/*
           generate_release_notes: true
