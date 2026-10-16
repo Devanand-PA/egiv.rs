@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub const PROGNAME: &str = "tkiv";
+pub const PROGNAME: &str = "egiv";
 pub const VERSION: &str = "0.4.1";
 
 pub const SLIDESHOW_DELAY: i64 = 5; // seconds
@@ -219,7 +219,7 @@ pub fn parse_config_text(text: &str) -> Result<Config, String> {
     Ok(cfg)
 }
 
-/// ~/.config/tkiv.py/config  (or $XDG_CONFIG_HOME/tkiv.py/config)
+/// ~/.config/egiv/config  (or $XDG_CONFIG_HOME/egiv/config)
 pub fn config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|s| !s.is_empty())
@@ -230,12 +230,30 @@ pub fn config_path() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("~"));
             home.join(".config")
         });
-    base.join("tkiv.py").join("config")
+    base.join("egiv").join("config")
+}
+
+/// Config location from the tkiv.py days, still read when the new one is
+/// absent so existing setups keep their bindings and theme.
+fn legacy_config_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    let p = base.join("tkiv.py").join("config");
+    p.exists().then_some(p)
 }
 
 /// Load config once.  On any error the whole config is discarded.
 pub fn load_config() -> Config {
-    let path = config_path();
+    let mut path = config_path();
+    if !path.exists() {
+        // Fall back to the tkiv.py-era location so existing setups keep
+        // their bindings and theme after the rename.
+        if let Some(legacy) = legacy_config_path() {
+            path = legacy;
+        }
+    }
     if !path.exists() {
         return Config::default();
     }

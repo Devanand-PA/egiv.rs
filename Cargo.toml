@@ -1,15 +1,15 @@
 [package]
-name = "tkiv"
+name = "egiv"
 version = "0.4.1"
 edition = "2021"
-description = "Combined image viewer (nsxiv-like) and image selector (dmenu-like) — Rust port of tkiv.py"
+description = "Combined image viewer (nsxiv-like) and image selector (dmenu-like), written in Rust with egui/eframe"
 
 [lib]
-name = "tkiv_lib"
+name = "egiv_lib"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tkiv"
+name = "egiv"
 path = "src/main.rs"
 
 [features]

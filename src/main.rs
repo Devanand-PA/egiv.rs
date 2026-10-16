@@ -1,13 +1,14 @@
-//! tkiv — Rust port of the combined image viewer / selector in tkiv.py.
+//! egiv — combined image viewer and selector, written in Rust with
+//! egui/eframe (a port of the tkiv.py Tk application).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use tkiv_lib::app::{opts_from_selector, opts_from_viewer, Opts};
-use tkiv_lib::app_main::App;
-use tkiv_lib::cli::{self};
-use tkiv_lib::config::{PROGNAME, VERSION};
-use tkiv_lib::model::{self, FileEntry};
+use egiv_lib::app::{opts_from_selector, opts_from_viewer, Opts};
+use egiv_lib::app_main::App;
+use egiv_lib::cli::{self};
+use egiv_lib::config::{PROGNAME, VERSION};
+use egiv_lib::model::{self, FileEntry};
 
 fn splash_usage(prog: &str) {
     eprintln!("usage: {prog} {{img|select}} [OPTIONS] ...\n\n  {prog} img    [OPTIONS] FILES...   image viewer\n  {prog} select [OPTIONS] PATHS...   image selector / dmenu");
@@ -15,33 +16,40 @@ fn splash_usage(prog: &str) {
 
 fn print_viewer_help() {
     println!("{PROGNAME} img {VERSION}");
-    println!("usage: tkiv img [-abcgHhiopqrvZ0] [-A FRAMERATE] [-e WID] [-G GAMMA] [--geometry GEOMETRY] [-N NAME] [-n NUM] [-S DELAY] [-s MODE] [-T SIZE] [--gallery-rows N] [--gallery-cols N] [--gallery-aspect N] [--sort MODE] [-R] [--no-searchbar] FILES...");
-    println!("\nKey bindings (search bar is always focused; actions use Ctrl+):");
+    println!("usage: egiv img [-abcgHhiopqrvZ0] [-A FRAMERATE] [-e WID] [-G GAMMA] [--geometry GEOMETRY] [-N NAME] [-n NUM] [-S DELAY] [-s MODE] [-T SIZE] [--gallery-rows N] [--gallery-cols N] [--gallery-aspect N] [--sort MODE] [-R] [--no-searchbar] FILES...");
+    println!("\nModes: image (full view), gallery (thumbnail grid), list (file list + preview).");
+    println!("Tab / Shift+Tab cycles between them; Return in gallery/list opens the image.");
+    println!("\nKey bindings:");
     println!("  Tab / Shift+Tab  cycle mode (image -> gallery -> list)");
     println!("  Return           switch image <-> gallery (or list -> image)");
     println!("  Esc              clear filter, or quit if empty");
-    println!("  Ctrl+Shift+S     toggle search bar / direct-key mode");
+    println!("  Ctrl+F           show / hide the search bar");
     println!("  Ctrl+Q           quit");
-    println!("  Ctrl+F           fullscreen");
-    println!("  Ctrl+B           toggle bar");
+    println!("  F11              fullscreen");
+    println!("  Ctrl+B           toggle status bar");
     println!("  Ctrl+R           reload");
     println!("  Ctrl+D           remove current or marked files");
     println!("  Ctrl+N / Ctrl+P  next / previous (respects filter)");
     println!("  Ctrl+H/J/K/L     pan");
-    println!("  Ctrl++ / Ctrl+-  zoom (image) / tile size (gallery)");
-    println!("  Ctrl+0           100% zoom");
+    println!("  Ctrl+plus/-/0    zoom the images: picture levels in image mode,");
+    println!("                   thumbnail size in gallery mode (hold to repeat)");
     println!("  Ctrl+M           mark    Ctrl+U  unmark all");
-    println!("  Ctrl+S           slideshow");
-    println!("  Ctrl+Space       toggle animation");
+    println!("  Ctrl+S           slideshow    Ctrl+Space  toggle animation");
     println!("  Ctrl+E           fit width   Ctrl+W  fit-down");
     println!("  Ctrl+Shift+W     fit         Ctrl+Shift+F  fill");
     println!("  Ctrl+Y / Ctrl+Shift+Y  cycle sort / reverse sort");
     println!("  Ctrl+{{ / Ctrl+}}  gamma down/up");
     println!("  Ctrl+( / Ctrl+)  contrast down/up");
     println!("  Ctrl+1 / Ctrl+2  brightness down/up");
-    println!("\nDirect-key mode (--no-searchbar or Ctrl+Shift+S): the search bar is hidden and every Ctrl+<key> action is rebound to plain <key>.");
-    println!("\nConfig file: ~/.config/tkiv.py/config (or $XDG_CONFIG_HOME/tkiv.py/config)");
-    println!("  INI-like sections: [keys], [theme], [behavior].  Any syntax error ignores the whole file.");
+    println!("  Mouse wheel      zoom (image mode)   drag  pan   click edges  navigate");
+    println!("\nThe search bar starts hidden.  With it hidden, keys act directly");
+    println!("(unmodified letters also trigger their bound actions); Ctrl+F shows");
+    println!("the bar so typed text filters the file list.");
+    println!("\nConfig file: ~/.config/egiv/config (or $XDG_CONFIG_HOME/egiv/config;");
+    println!("the old ~/.config/tkiv.py/config is still read when the new one is absent).");
+    println!("  INI-like sections: [keys], [theme], [behavior]  (key_repeat_ms,");
+    println!("  key_hold_delay_ms, slideshow_delay, max_load_dim).  Any syntax error");
+    println!("  ignores the whole file.");
     println!("\nOptions:");
     println!("  -g/-t, --gallery            start in gallery mode");
     println!("  -l, --list-mode             start in list mode");
@@ -56,11 +64,11 @@ fn print_viewer_help() {
 
 fn print_selector_help() {
     println!("{PROGNAME} select {VERSION}");
-    println!("usage: tkiv select [OPTIONS] PATHS...");
+    println!("usage: egiv select [OPTIONS] PATHS...");
     println!("\nKey bindings match the viewer. Press Return to accept and print, Esc to cancel. Ctrl+M (or Ctrl+Enter) toggles a mark; when any file is marked, all marked files are printed on accept.");
     println!("Ctrl+Y / Ctrl+Shift+Y  cycle sort / reverse sort");
-    println!("Ctrl+Shift+S           toggle search bar / direct-key mode");
-    println!("\nConfig file: ~/.config/tkiv.py/config (or $XDG_CONFIG_HOME/tkiv.py/config)");
+    println!("Ctrl+F                 show / hide the search bar");
+    println!("\nConfig file: ~/.config/egiv/config (or $XDG_CONFIG_HOME/egiv/config).");
 }
 
 fn parse_geometry(s: &str) -> Option<egui::Vec2> {
@@ -91,17 +99,17 @@ fn run_app(
                 .unwrap_or(egui::vec2(900.0, 700.0)),
         )
         .with_min_inner_size(
-            if opts.purpose == tkiv_lib::app::Purpose::Select || opts.floating_window {
+            if opts.purpose == egiv_lib::app::Purpose::Select || opts.floating_window {
                 egui::vec2(600.0, 400.0)
             } else {
                 egui::vec2(100.0, 100.0)
             },
         )
         .with_fullscreen(opts.fullscreen);
-    if opts.purpose == tkiv_lib::app::Purpose::Select || opts.floating_window {
+    if opts.purpose == egiv_lib::app::Purpose::Select || opts.floating_window {
         // tkiv.py parity: select-mode and --floating-window windows get
         // '-type dialog' (which makes tiling WMs float them) and -topmost.
-        // The window is created hidden so tkiv_lib::floating::setup_dialog
+        // The window is created hidden so egiv_lib::floating::setup_dialog
         // can set _NET_WM_WINDOW_TYPE_DIALOG before it is mapped; it is
         // shown (and sized) on the first frame.
         vb = vb.with_always_on_top().with_visible(false);
@@ -355,7 +363,7 @@ fn main() {
         "img" | "view" | "viewer" | "pysxiv" => run_viewer(&rest),
         "select" | "sel" | "selector" | "sel_img" => run_selector(&rest),
         mode => {
-            eprintln!("tkiv: unknown mode: {mode:?}");
+            eprintln!("egiv: unknown mode: {mode:?}");
             splash_usage(&prog);
             1
         }

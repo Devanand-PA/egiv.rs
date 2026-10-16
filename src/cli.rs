@@ -757,7 +757,7 @@ impl ViewerOpts {
             match v.as_str() {
                 "none" | "name" | "mtime" | "size" => o.shared.sort = v.clone(),
                 _ => return Err(format!(
-                    "tkiv img: error: argument --sort: invalid choice: '{v}' (choose from 'none', 'name', 'mtime', 'size')"
+                    "egiv img: error: argument --sort: invalid choice: '{v}' (choose from 'none', 'name', 'mtime', 'size')"
                 )),
             }
         }
@@ -813,7 +813,7 @@ impl SelectorOpts {
             match v.as_str() {
                 "none" | "name" | "mtime" | "size" => o.shared.sort = v.clone(),
                 _ => return Err(format!(
-                    "tkiv select: error: argument --sort: invalid choice: '{v}' (choose from 'none', 'name', 'mtime', 'size')"
+                    "egiv select: error: argument --sort: invalid choice: '{v}' (choose from 'none', 'name', 'mtime', 'size')"
                 )),
             }
         }
@@ -834,11 +834,11 @@ impl SelectorOpts {
 }
 
 pub fn parse_viewer_args(args: &[String]) -> Result<ViewerOpts, String> {
-    ViewerOpts::from_parse(parse_args(&viewer_flags(), args, "tkiv img")?)
+    ViewerOpts::from_parse(parse_args(&viewer_flags(), args, "egiv img")?)
 }
 
 pub fn parse_selector_args(args: &[String]) -> Result<SelectorOpts, String> {
-    SelectorOpts::from_parse(parse_args(&selector_flags(), args, "tkiv select")?)
+    SelectorOpts::from_parse(parse_args(&selector_flags(), args, "egiv select")?)
 }
 
 /// Read pre-select labels exactly like tkiv.py's _read_pre_select.

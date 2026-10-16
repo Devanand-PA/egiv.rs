@@ -26,7 +26,7 @@ static VIPS_READY: OnceLock<bool> = OnceLock::new();
 #[cfg(feature = "vips")]
 fn vips_enabled() -> bool {
     *VIPS_READY.get_or_init(|| {
-        match libvips::VipsApp::new("tkiv", false) {
+        match libvips::VipsApp::new("egiv", false) {
             Ok(app) => {
                 // VipsApp::drop calls vips_shutdown; the library must live for
                 // all worker threads, so intentionally leak this tiny handle.
@@ -259,7 +259,7 @@ pub fn cache_dir() -> PathBuf {
                 .unwrap_or_else(|| PathBuf::from("~"));
             home.join(".cache")
         });
-    base.join("tkiv_thumbs")
+    base.join("egiv_thumbs")
 }
 
 fn disk_cache_path(path: &str, w: u32, h: u32) -> Option<PathBuf> {
@@ -349,7 +349,7 @@ mod tests {
     use super::*;
 
     fn test_png(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("tkiv-rust-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("egiv-rust-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{name}.png"));
         let mut img = RgbaImage::new(32, 16);

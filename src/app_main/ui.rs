@@ -4,6 +4,9 @@
 use super::*;
 use egui::{ColorImage, Margin, RichText, TopBottomPanel, Ui};
 
+/// Height of one row in list mode (monospace 13 + padding).
+const LIST_ROW_H: f32 = 18.0;
+
 fn texture_options(smooth: bool) -> TextureOptions {
     if smooth {
         TextureOptions::LINEAR
@@ -377,6 +380,9 @@ impl App {
                 .unwrap_or(crate::config::KEY_HOLD_DELAY_MS)
                 .max(1) as u64,
         );
+        // Held Ctrl+plus/minus zoom continuously at a gentler pace than the
+        // navigation keys, so the ramp through the zoom levels is visible.
+        let zoom_every = Duration::from_millis((repeat_ms * 4).max(120));
         for ev in events {
             let egui::Event::Key {
                 key,
@@ -425,20 +431,32 @@ impl App {
                         key,
                     ));
                 });
-                // One step per press, like one wheel notch.  The held-key
-                // repeat is deliberately not armed here: a held chord would
-                // otherwise ramp the image zoom to its limit within a few
-                // hundred ms, leaving a flat magnified crop on screen.
+                // One step per press, like one wheel notch; holding the
+                // chord then keeps zooming through the same pending path
+                // (first repeat after the hold delay, then every
+                // zoom_every).  Ctrl+0 does not repeat.
                 if !repeat {
                     if self.mode == Mode::Image {
                         // Applied inside render_image through the very same
                         // act_zoom call the mouse wheel uses, with the same
                         // viewport metrics and the same point in the frame.
-                        self.pending_key_zoom = match action {
+                        let step = match action {
                             Action::ZoomIn => Some(1),
                             Action::ZoomOut => Some(-1),
-                            _ => Some(0),
+                            _ => None,
                         };
+                        self.pending_key_zoom = step.or(Some(0));
+                        if let Some(d) = step {
+                            self.held.insert(
+                                key_name.clone(),
+                                HeldKey {
+                                    key,
+                                    what: HeldWhat::Zoom(d),
+                                    interval: zoom_every,
+                                    next_fire: Instant::now() + hold_delay,
+                                },
+                            );
+                        }
                     } else {
                         self.run_action(action, ctx, win);
                     }
@@ -692,15 +710,26 @@ impl App {
                                 .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Middle);
                             if let Some(tex) = self.thumbs.get(&idx) {
                                 let sz = tex.size_vec2();
+                                // Cover the tile: fill it completely in at
+                                // least one dimension (cropping the
+                                // overflow) instead of letterboxing the
+                                // image inside the frame.  Small images are
+                                // upscaled to fill as well.
                                 let scale = ((tw - 5.0) / sz.x.max(1.0))
-                                    .min((th - 5.0) / sz.y.max(1.0))
-                                    .min(1.0);
+                                    .max((th - 5.0) / sz.y.max(1.0));
                                 let isz = sz * scale.max(0.01);
+                                let img_area = egui::Rect::from_min_size(
+                                    rect.min,
+                                    Vec2::new(tw, th),
+                                );
                                 let r = egui::Rect::from_center_size(
-                                    rect.min + Vec2::new(tw / 2.0, th / 2.0),
+                                    img_area.center(),
                                     isz,
                                 );
-                                ui.painter().image(
+                                // Clip to the image area so the overflowing
+                                // dimension cannot bleed over neighbouring
+                                // tiles or the caption below.
+                                ui.painter_at(img_area).image(
                                     tex.id(),
                                     r,
                                     egui::Rect::from_min_max(
@@ -830,21 +859,41 @@ impl App {
                             }
                             for pos in 0..self.visible.len() {
                                 let idx = self.visible[pos];
-                                let f = &self.files[idx];
                                 let selected = idx == self.fileidx;
-                                let text = RichText::new(&f.label).color(if f.marked() || selected
-                                {
-                                    self.theme.selected_fg
-                                } else {
-                                    self.theme.fg_text
-                                });
-                                let resp = ui.selectable_label(selected, text);
+                                let marked = self.files[idx].marked();
+                                let label = self.files[idx].label.clone();
+                                // Painted by hand instead of
+                                // egui::selectable_label: that widget also
+                                // fills its background when hovered,
+                                // highlighted or keyboard-focused, which
+                                // showed up as a phantom 'ghost' selection
+                                // on a row the pointer merely sat over.
+                                let (row_rect, resp) = ui
+                                    .allocate_exact_size(
+                                        Vec2::new(list_w, LIST_ROW_H),
+                                        Sense::click(),
+                                    );
+                                if selected {
+                                    ui.painter().rect_filled(
+                                        row_rect,
+                                        3.0,
+                                        self.theme.selected_bg,
+                                    );
+                                }
+                                ui.painter().text(
+                                    row_rect.left_center(),
+                                    egui::Align2::LEFT_CENTER,
+                                    &label,
+                                    font.clone(),
+                                    if selected || marked {
+                                        self.theme.selected_fg
+                                    } else {
+                                        self.theme.fg_text
+                                    },
+                                );
                                 if self.list_scroll_to == Some(idx) {
                                     // Minimal scroll, matching listbox.see().
-                                    ui.scroll_to_rect(resp.rect, None);
-                                }
-                                if f.marked() {
-                                    let _ = resp.rect.expand(1.0);
+                                    ui.scroll_to_rect(row_rect, None);
                                 }
                                 if resp.clicked() {
                                     self.fileidx = idx;
@@ -1002,6 +1051,9 @@ impl eframe::App for App {
             // tkiv.py geometry (screen-100 x screen-100 +50+50).
             self.pending_show = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            // Grab input focus immediately, like dmenu: the selector is
+            // on top and meant to be typed into without a click first.
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             if let Some((w, h, x, y)) = self.pending_geometry.take() {
                 // The pending geometry is in PHYSICAL pixels (measured from
                 // the X screen), while the viewport commands are in egui

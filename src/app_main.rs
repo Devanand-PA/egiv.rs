@@ -1,4 +1,4 @@
-//! eframe::App implementation for the tkiv GUI.
+//! eframe::App implementation for the egiv GUI.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ fn job_queue() -> Sender<Job> {
             for worker in 0..IMG_WORKERS_MAX {
                 let rx = std::sync::Arc::clone(&rx);
                 std::thread::Builder::new()
-                    .name(format!("tkiv-img-{worker}"))
+                    .name(format!("egiv-img-{worker}"))
                     .spawn(move || {
                         let rx = std::sync::Arc::clone(&rx);
                         loop {
@@ -38,7 +38,7 @@ fn job_queue() -> Sender<Job> {
                             job();
                         }
                     })
-                    .expect("failed to start tkiv image worker");
+                    .expect("failed to start egiv image worker");
             }
             tx
         })
@@ -161,6 +161,9 @@ pub struct App {
 enum HeldWhat {
     /// A configurable action (next, zoom, gamma, pan, ...).
     Act(Action),
+    /// Image-mode zoom step re-fired while a Ctrl+plus/minus chord is
+    /// held; goes through pending_key_zoom (the wheel's call site).
+    Zoom(i64),
     /// A fixed navigation key; re-resolved per tick so it follows the
     /// current mode, exactly like the lambdas tkiv.py binds.
     Nav(Dir),
@@ -199,6 +202,12 @@ impl App {
                 if let Some(seq) = keys::parse_key_spec(spec) {
                     if let Some(b) = Binding::from_tk_seq(&seq) {
                         keymap.push((b.clone(), *action, false));
+                        // Direct (searchbar-hidden) mode keeps the real
+                        // binding as well, so Ctrl chords keep working when
+                        // the bar is hidden; to_direct_key adds the
+                        // plain-key variant on top (tkiv.py's direct-key
+                        // UX).
+                        keymap_direct.push((b, *action, true));
                     }
                     if let Some(dk) = keys::to_direct_key(&seq) {
                         if let Some(b) = Binding::from_tk_seq(&dk) {
@@ -375,7 +384,7 @@ impl App {
         let recursive = self.opts.recursive;
         let sort_time = self.opts.time;
         std::thread::Builder::new()
-            .name("tkiv-scan".into())
+            .name("egiv-scan".into())
             .spawn(move || {
                 let mut seen: HashSet<String> = HashSet::new();
                 let mut batch: Vec<String> = Vec::new();
@@ -847,6 +856,7 @@ impl App {
         for what in &due {
             match what {
                 HeldWhat::Act(a) => self.run_action(*a, ctx, win),
+                HeldWhat::Zoom(d) => self.pending_key_zoom = Some(*d),
                 HeldWhat::Nav(d) => self.nav_key(*d),
                 HeldWhat::Page(d) => self.page_key(*d, win.y, self.row_h(win)),
             }
