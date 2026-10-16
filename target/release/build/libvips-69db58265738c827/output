@@ -1,3 +1,0 @@
-cargo:rustc-link-lib=vips
-cargo:rustc-link-lib=glib-2.0
-cargo:rustc-link-lib=gobject-2.0

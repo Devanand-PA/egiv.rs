@@ -273,7 +273,8 @@ impl App {
             alternate: 0,
             visible: (0..files.len()).collect(),
             filter_text: String::new(),
-            no_searchbar: opts.no_searchbar,
+            // The search/filter bar starts hidden; Ctrl+F toggles it.
+            no_searchbar: true,
             show_bar: opts.show_bar,
             sort_mode: opts.sort,
             sort_reverse: opts.sort_reverse,
@@ -782,7 +783,10 @@ impl App {
     /// keys repeat at half the configured `key_repeat_ms` so that holding
     /// Up/Down scrolls quickly (tkiv.py repeats at key_repeat_ms; the
     /// faster default here is a deliberate UX improvement).
-    fn hold_nav(&mut self, key: egui::Key, name: String, dir: Dir, interval: Duration) {
+    /// `delay` is how long the key must be held before the repeat timer
+    /// starts firing (`interval` thereafter), so a single press of an
+    /// arrow/Page key advances exactly one step.
+    fn hold_nav(&mut self, key: egui::Key, name: String, dir: Dir, interval: Duration, delay: Duration) {
         self.nav_key(dir);
         self.held.insert(
             name,
@@ -790,12 +794,20 @@ impl App {
                 key,
                 what: HeldWhat::Nav(dir),
                 interval,
-                next_fire: Instant::now() + interval,
+                next_fire: Instant::now() + delay,
             },
         );
     }
 
-    fn hold_page(&mut self, key: egui::Key, name: String, dir: i64, interval: Duration, win: Vec2) {
+    fn hold_page(
+        &mut self,
+        key: egui::Key,
+        name: String,
+        dir: i64,
+        interval: Duration,
+        win: Vec2,
+        delay: Duration,
+    ) {
         self.page_key(dir, win.y, self.row_h(win));
         self.held.insert(
             name,
@@ -803,7 +815,7 @@ impl App {
                 key,
                 what: HeldWhat::Page(dir),
                 interval,
-                next_fire: Instant::now() + interval,
+                next_fire: Instant::now() + delay,
             },
         );
     }
@@ -1319,8 +1331,10 @@ impl App {
                 return;
             }
             self.gallery_tile_override = Some(ns);
-            self.thumbs.clear();
-            self.thumb_in_flight.clear();
+            // The existing thumbnails are kept on screen (drawn scaled into
+            // the new tile size) while sharper ones are re-decoded in the
+            // background; clearing them here made the gallery go blank
+            // after every Ctrl+plus/minus.
             self.gallery_scroll_to = Some(self.fileidx);
             return;
         }
@@ -1529,11 +1543,19 @@ impl App {
 
     fn submit_gallery_tile(&mut self, i: usize, max_w: u32, max_h: u32) {
         if i >= self.files.len()
-            || self.thumbs.contains_key(&i)
             || self.thumb_in_flight.contains(&i)
             || self.thumb_in_flight.len() >= THUMB_MAX_IN_FLIGHT
         {
             return;
+        }
+        // A thumbnail is skipped only when one at a sufficient resolution
+        // already exists; an older, smaller one stays on screen (scaled)
+        // while a sharper decode for the new tile size runs in the
+        // background and replaces it.
+        if let Some(tex) = self.thumbs.get(&i) {
+            if tex.size()[0] >= max_w as usize {
+                return;
+            }
         }
         self.thumb_in_flight.insert(i);
         let path = self.files[i].path.clone();

@@ -367,6 +367,16 @@ impl App {
         // Fixed navigation keys repeat twice as fast as the configurable
         // actions so holding Up/Down scrolls quickly.
         let nav_repeat = Duration::from_millis((repeat_ms / 2).max(1));
+        // Repeats only start after the key has been held for this long, so
+        // a single press advances exactly one step (a 30ms repeat otherwise
+        // fired several times within a normal tap).
+        let hold_delay = Duration::from_millis(
+            self.cfg_behavior
+                .get("key_hold_delay_ms")
+                .copied()
+                .unwrap_or(crate::config::KEY_HOLD_DELAY_MS)
+                .max(1) as u64,
+        );
         for ev in events {
             let egui::Event::Key {
                 key,
@@ -449,7 +459,7 @@ impl App {
                                 key,
                                 what: HeldWhat::Act(a),
                                 interval: repeat_every,
-                                next_fire: Instant::now() + repeat_every,
+                                next_fire: Instant::now() + hold_delay,
                             },
                         );
                     }
@@ -463,12 +473,12 @@ impl App {
             // Fixed navigation / mode keys.  Navigation keys register a
             // hold timer; mode keys are one-shot (auto-repeat swallowed).
             match key {
-                Key::ArrowLeft => self.hold_nav(key, key_name, Dir::Left, nav_repeat),
-                Key::ArrowRight => self.hold_nav(key, key_name, Dir::Right, nav_repeat),
-                Key::ArrowUp => self.hold_nav(key, key_name, Dir::Up, nav_repeat),
-                Key::ArrowDown => self.hold_nav(key, key_name, Dir::Down, nav_repeat),
-                Key::PageUp => self.hold_page(key, key_name, -1, nav_repeat, win),
-                Key::PageDown => self.hold_page(key, key_name, 1, nav_repeat, win),
+                Key::ArrowLeft => self.hold_nav(key, key_name, Dir::Left, nav_repeat, hold_delay),
+                Key::ArrowRight => self.hold_nav(key, key_name, Dir::Right, nav_repeat, hold_delay),
+                Key::ArrowUp => self.hold_nav(key, key_name, Dir::Up, nav_repeat, hold_delay),
+                Key::ArrowDown => self.hold_nav(key, key_name, Dir::Down, nav_repeat, hold_delay),
+                Key::PageUp => self.hold_page(key, key_name, -1, nav_repeat, win, hold_delay),
+                Key::PageDown => self.hold_page(key, key_name, 1, nav_repeat, win, hold_delay),
                 Key::Home => self.run_action(Action::First, ctx, win),
                 Key::End => self.run_action(Action::Last, ctx, win),
                 Key::Tab if mods.shift => self.run_action(Action::ModeCycleRev, ctx, win),
@@ -969,9 +979,13 @@ impl eframe::App for App {
                 let ppp = ctx.pixels_per_point();
                 let deco_w = 16.0 / ppp;
                 let deco_h = 48.0 / ppp;
+                // (w, h) already carry the tkiv.py geometry (display size
+                // minus 100px, centered by the +50/+50 offset); only the WM
+                // decorations are subtracted here so the OUTER window lands
+                // on the requested size.
                 let inner = Vec2::new(
-                    ((w - 100.0) / ppp - deco_w).max(300.0),
-                    ((h - 100.0) / ppp - deco_h).max(200.0),
+                    (w / ppp - deco_w).max(300.0),
+                    (h / ppp - deco_h).max(200.0),
                 );
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(inner));
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(

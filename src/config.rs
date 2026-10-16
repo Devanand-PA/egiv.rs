@@ -9,7 +9,10 @@ pub const VERSION: &str = "0.4.0";
 
 pub const SLIDESHOW_DELAY: i64 = 5; // seconds
 pub const MAX_LOAD_DIM: i64 = 4096;
-pub const KEY_REPEAT_MS: i64 = 60;
+pub const KEY_REPEAT_MS: i64 = 30;
+/// A key must be held this long before its repeat timer starts firing, so
+/// a single press advances exactly one step.
+pub const KEY_HOLD_DELAY_MS: i64 = 300;
 
 /// Theme colours (Nord-ish), same defaults as tkiv.py.
 pub fn default_theme() -> HashMap<&'static str, &'static str> {
@@ -34,7 +37,7 @@ pub fn default_keys() -> Vec<(&'static str, Vec<&'static str>)> {
         ("toggle_bar", vec!["Ctrl+B"]),
         ("remove", vec!["Ctrl+D"]),
         ("fit_width", vec!["Ctrl+E"]),
-        ("fullscreen", vec!["Ctrl+F"]),
+        ("fullscreen", vec!["F11"]),
         ("first", vec!["Ctrl+G"]),
         ("copy_to_clipboard", vec!["Ctrl+C"]),
         ("pan_left", vec!["Ctrl+H"]),
@@ -73,7 +76,7 @@ pub fn default_keys() -> Vec<(&'static str, Vec<&'static str>)> {
         ("fit_height", vec!["Ctrl+Shift+E"]),
         ("toggle_alpha", vec!["Ctrl+Shift+I"]),
         ("sort_reverse", vec!["Ctrl+Shift+Y"]),
-        ("toggle_searchbar", vec!["Ctrl+Shift+S"]),
+        ("toggle_searchbar", vec!["Ctrl+F"]),
     ]
 }
 
@@ -82,6 +85,7 @@ pub fn default_behavior() -> HashMap<&'static str, i64> {
         ("slideshow_delay", SLIDESHOW_DELAY),
         ("max_load_dim", MAX_LOAD_DIM),
         ("key_repeat_ms", KEY_REPEAT_MS),
+        ("key_hold_delay_ms", KEY_HOLD_DELAY_MS),
     ])
 }
 
