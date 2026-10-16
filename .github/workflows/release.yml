@@ -2,48 +2,44 @@ name: Build and Release egiv
 
 on:
   push:
-    branches: [ main ]
+    branches: [master]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   version-check:
-    name: Check version change
+    name: Check whether v$VERSION needs a release
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version-output.outputs.version }}
-      changed: ${{ steps.changed-output.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2   # need parent commit
-      - name: Extract version from Cargo.toml
-        id: version-output
+
+      - name: Decide whether to release
+        id: check
         run: |
           VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-      - name: Check if version changed vs parent commit
-        id: changed-output
-        run: |
-          # Get Cargo.toml from parent commit
-          if git show HEAD~1:Cargo.toml 2>/dev/null | grep -q "^version ="; then
-            PREV_VERSION=$(git show HEAD~1:Cargo.toml | grep -m1 '^version =' | cut -d'"' -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Release whenever the tag for the current Cargo.toml version does
+          # not exist yet.  This covers version bumps, the very first run,
+          # and retries after a failed or skipped run - without re-releasing
+          # versions that are already out.
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists - no release needed."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
-            PREV_VERSION=""
-          fi
-          CURRENT_VERSION=$(grep -m1 '^version =' Cargo.toml | cut -d'"' -f2)
-          if [[ "$CURRENT_VERSION" != "$PREV_VERSION" ]]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "Tag v$VERSION is missing - releasing."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
           fi
 
   build:
     name: Build ${{ matrix.target }}
     needs: version-check
-    if: ${{ needs.version-check.outputs.changed == 'true' }}
+    if: needs.version-check.outputs.should_release == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -59,6 +55,7 @@ jobs:
             target: x86_64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -155,7 +152,7 @@ jobs:
   release:
     name: Create GitHub Release
     needs: [version-check, build]
-    if: ${{ needs.version-check.outputs.changed == 'true' }}
+    if: needs.version-check.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts

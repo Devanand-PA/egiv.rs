@@ -58,6 +58,26 @@ fn key_matches(b: &Binding, key: Key, mods: egui::Modifiers) -> bool {
         && b.meta == mods.mac_cmd
 }
 
+/// The zoom action a Ctrl+plus/equals/minus/0 chord maps to, if any.
+///
+/// Ctrl+Shift+0 is excluded even though it reports the same physical key
+/// (Key::Num0): on US layouts Shift+0 types ')' and Ctrl+) is bound to
+/// contrast_up, so the shifted chord must fall through to the keymap.  The
+/// other shifted variants stay zoom chords - Ctrl+Shift+= and Ctrl+Shift+-
+/// have no conflicting binding, and egui reports them through the same
+/// logical keys (Plus/Minus).
+fn zoom_chord_action(key: Key, mods: egui::Modifiers) -> Option<Action> {
+    if !(mods.ctrl || mods.mac_cmd) {
+        return None;
+    }
+    match key {
+        Key::Plus | Key::Equals => Some(Action::ZoomIn),
+        Key::Minus => Some(Action::ZoomOut),
+        Key::Num0 if !mods.shift => Some(Action::Zoom100),
+        _ => None,
+    }
+}
+
 /// Port of tkiv.py `_prepare_crop` colour adjustments.  Each enhancement is
 /// applied ONLY when its step value is non-zero, exactly like the Python
 /// code — the neutral value of one adjustment must not corrupt the others:
@@ -414,14 +434,19 @@ impl App {
             // these very shortcuts, so they are consumed here first - on the
             // initial press AND on every synthetic auto-repeat - which
             // shadows that completely.
-            if (modifiers.ctrl || modifiers.mac_cmd)
-                && matches!(key, Key::Plus | Key::Equals | Key::Minus | Key::Num0)
+            //
+            // Exception: Ctrl+Shift+0 types ')' on US layouts (contrast_up
+            // by default), so it is NOT zoom-to-default.  egui's shortcut
+            // matching ignores the extra shift (Modifiers::matches_logically),
+            // so its built-in Ctrl+0 UI-zoom would still fire on that press
+            // - hence the shortcut is consumed either way, but only the
+            // unshifted press acts as a zoom; the shifted one falls through
+            // to the keymap below.
+            let zoom_action = zoom_chord_action(key, modifiers);
+            if zoom_action.is_some()
+                || ((modifiers.ctrl || modifiers.mac_cmd)
+                    && matches!(key, Key::Plus | Key::Equals | Key::Minus | Key::Num0))
             {
-                let action = match key {
-                    Key::Plus | Key::Equals => Action::ZoomIn,
-                    Key::Minus => Action::ZoomOut,
-                    _ => Action::Zoom100,
-                };
                 // Consume the egui UI-zoom shortcut matching this key press
                 // (modifiers match logically: shift/alt extras are ignored,
                 // exactly like egui's own end-pass handling).
@@ -431,37 +456,41 @@ impl App {
                         key,
                     ));
                 });
-                // One step per press, like one wheel notch; holding the
-                // chord then keeps zooming through the same pending path
-                // (first repeat after the hold delay, then every
-                // zoom_every).  Ctrl+0 does not repeat.
-                if !repeat {
-                    if self.mode == Mode::Image {
-                        // Applied inside render_image through the very same
-                        // act_zoom call the mouse wheel uses, with the same
-                        // viewport metrics and the same point in the frame.
-                        let step = match action {
-                            Action::ZoomIn => Some(1),
-                            Action::ZoomOut => Some(-1),
-                            _ => None,
-                        };
-                        self.pending_key_zoom = step.or(Some(0));
-                        if let Some(d) = step {
-                            self.held.insert(
-                                key_name.clone(),
-                                HeldKey {
-                                    key,
-                                    what: HeldWhat::Zoom(d),
-                                    interval: zoom_every,
-                                    next_fire: Instant::now() + hold_delay,
-                                },
-                            );
+                if let Some(action) = zoom_action {
+                    // One step per press, like one wheel notch; holding the
+                    // chord then keeps zooming through the same pending path
+                    // (first repeat after the hold delay, then every
+                    // zoom_every).  Ctrl+0 does not repeat.
+                    if !repeat {
+                        if self.mode == Mode::Image {
+                            // Applied inside render_image through the very same
+                            // act_zoom call the mouse wheel uses, with the same
+                            // viewport metrics and the same point in the frame.
+                            let step = match action {
+                                Action::ZoomIn => Some(1),
+                                Action::ZoomOut => Some(-1),
+                                _ => None,
+                            };
+                            self.pending_key_zoom = step.or(Some(0));
+                            if let Some(d) = step {
+                                self.held.insert(
+                                    key_name.clone(),
+                                    HeldKey {
+                                        key,
+                                        what: HeldWhat::Zoom(d),
+                                        interval: zoom_every,
+                                        next_fire: Instant::now() + hold_delay,
+                                    },
+                                );
+                            }
+                        } else {
+                            self.run_action(action, ctx, win);
                         }
-                    } else {
-                        self.run_action(action, ctx, win);
                     }
+                    continue;
                 }
-                continue;
+                // Ctrl+Shift+0 = ')': fall through to the keymap so the
+                // shifted chord reaches contrast_up (or its rebound action).
             }
             // Synthetic auto-repeat events are ignored: repetition is
             // driven by our own hold timers (tkiv.py's after() chain),
@@ -1207,6 +1236,36 @@ mod tests {
         mods.shift = true;
         assert!(key_matches(&binding("W", false, false), Key::W, mods));
         assert!(key_matches(&binding("S", false, false), Key::S, mods));
+    }
+
+    #[test]
+    fn ctrl_shift_0_is_paren_not_zoom() {
+        // ')' is Shift+0 physically; Ctrl+Shift+0 must fall through to the
+        // keymap as contrast_up, so it must NOT map to Zoom100 (regression:
+        // the zoom-chord handler used to hijack every Ctrl+Num0, shifted or
+        // not, so Ctrl+) could never fire).
+        let mut shifted = egui::Modifiers::CTRL;
+        shifted.shift = true;
+        assert_eq!(zoom_chord_action(Key::Num0, shifted), None);
+        // Plain Ctrl+0 still zooms to default.
+        assert_eq!(
+            zoom_chord_action(Key::Num0, egui::Modifiers::CTRL),
+            Some(Action::Zoom100)
+        );
+        // The other zoom chords are unaffected by shift.
+        assert_eq!(zoom_chord_action(Key::Plus, shifted), Some(Action::ZoomIn));
+        assert_eq!(
+            zoom_chord_action(Key::Equals, shifted),
+            Some(Action::ZoomIn)
+        );
+        assert_eq!(
+            zoom_chord_action(Key::Minus, shifted),
+            Some(Action::ZoomOut)
+        );
+        // Without Ctrl/Cmd there is no zoom chord at all.
+        let mut no_ctrl = egui::Modifiers::SHIFT;
+        no_ctrl.alt = true;
+        assert_eq!(zoom_chord_action(Key::Num0, no_ctrl), None);
     }
 
     // ------------------------------------------------ adjusted_image tests
