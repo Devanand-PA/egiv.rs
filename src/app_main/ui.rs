@@ -27,9 +27,22 @@ fn upload(
 }
 
 fn key_matches(b: &Binding, key: Key, mods: egui::Modifiers) -> bool {
-    // Tk records shifted punctuation as the resulting keysym (braceleft,
-    // parenleft, less, ...), while egui reports the physical key plus
-    // Modifiers::SHIFT.  Do not require an exact shift match for those.
+    key_matches_shift(b, key, mods, false)
+}
+
+/// Shift handling: Tk records shifted punctuation as the resulting keysym
+/// (braceleft, parenleft, less, ...), while egui reports the physical key
+/// plus Modifiers::SHIFT.  Do not require an exact shift match for those.
+/// With `strict_shift` the binding's shift flag must equal the event's -
+/// pass one of find_binding, which keeps chords like Ctrl+F (searchbar)
+/// distinct from Ctrl+Shift+F (fill) even though the lenient rule would let
+/// the uppercase-letter binding match both.
+fn key_matches_shift(
+    b: &Binding,
+    key: Key,
+    mods: egui::Modifiers,
+    strict_shift: bool,
+) -> bool {
     const SHIFTED_SYMBOLS: [&str; 11] = [
         "plus",
         "braceleft",
@@ -43,10 +56,10 @@ fn key_matches(b: &Binding, key: Key, mods: egui::Modifiers) -> bool {
         "underscore",
         "equal",
     ];
-    let shift_ok = if SHIFTED_SYMBOLS.contains(&b.key.as_str())
+    let shift_lenient = SHIFTED_SYMBOLS.contains(&b.key.as_str())
         || (b.key.chars().count() == 1
-            && b.key.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
-    {
+            && b.key.chars().next().is_some_and(|c| c.is_ascii_uppercase()));
+    let shift_ok = if !strict_shift && shift_lenient {
         true
     } else {
         b.shift == mods.shift
@@ -56,6 +69,27 @@ fn key_matches(b: &Binding, key: Key, mods: egui::Modifiers) -> bool {
         && shift_ok
         && b.alt == mods.alt
         && b.meta == mods.mac_cmd
+}
+
+/// Find the binding matching this key press: exact shift parity across the
+/// whole map first, lenient shift rules only as a fallback.  Matching order
+/// then no longer decides between chords that share a physical key, e.g.
+/// fill (Ctrl+Shift+F, "F", lenient) vs toggle_searchbar (Ctrl+F, "f",
+/// exact): with single-pass first-match-wins the earlier `fill` entry also
+/// swallowed plain Ctrl+F and the searchbar could never open.
+fn find_binding(
+    map: &[(Binding, Action, bool)],
+    key: Key,
+    mods: egui::Modifiers,
+) -> Option<Action> {
+    for strict in [true, false] {
+        for (b, action, _) in map {
+            if key_matches_shift(b, key, mods, strict) {
+                return Some(*action);
+            }
+        }
+    }
+    None
 }
 
 /// The zoom action a Ctrl+plus/equals/minus/0 chord maps to, if any.
@@ -505,27 +539,19 @@ impl App {
             } else {
                 &self.keymap
             };
-            let mut done = false;
-            for (b, action, _) in map.iter() {
-                if key_matches(b, key, mods) {
-                    let a = *action;
-                    self.run_action(a, ctx, win);
-                    if REPEATABLE.contains(&a) {
-                        self.held.insert(
-                            key_name.clone(),
-                            HeldKey {
-                                key,
-                                what: HeldWhat::Act(a),
-                                interval: repeat_every,
-                                next_fire: Instant::now() + hold_delay,
-                            },
-                        );
-                    }
-                    done = true;
-                    break;
+            if let Some(a) = find_binding(map, key, mods) {
+                self.run_action(a, ctx, win);
+                if REPEATABLE.contains(&a) {
+                    self.held.insert(
+                        key_name.clone(),
+                        HeldKey {
+                            key,
+                            what: HeldWhat::Act(a),
+                            interval: repeat_every,
+                            next_fire: Instant::now() + hold_delay,
+                        },
+                    );
                 }
-            }
-            if done {
                 continue;
             }
             // Fixed navigation / mode keys.  Navigation keys register a
@@ -1266,6 +1292,52 @@ mod tests {
         let mut no_ctrl = egui::Modifiers::SHIFT;
         no_ctrl.alt = true;
         assert_eq!(zoom_chord_action(Key::Num0, no_ctrl), None);
+    }
+
+    #[test]
+    fn ctrl_f_opens_searchbar_not_fill() {
+        // fill (Ctrl+Shift+F) sits BEFORE toggle_searchbar (Ctrl+F) in the
+        // keymap, and its uppercase-letter binding matches leniently, so
+        // first-match-wins used to swallow plain Ctrl+F (image just "fills",
+        // invisibly) and the searchbar could never open.  find_binding must
+        // prefer the exact-parity searchbar binding regardless of order.
+        let map = vec![
+            (binding("F", true, true), Action::Fill, true),
+            (binding("f", true, false), Action::ToggleSearchbar, true),
+        ];
+        let ctrl = egui::Modifiers::CTRL;
+        assert_eq!(
+            find_binding(&map, Key::F, ctrl),
+            Some(Action::ToggleSearchbar)
+        );
+        let mut ctrl_shift = egui::Modifiers::CTRL;
+        ctrl_shift.shift = true;
+        assert_eq!(find_binding(&map, Key::F, ctrl_shift), Some(Action::Fill));
+    }
+
+    #[test]
+    fn lenient_matching_still_fallback_for_shifted_symbols() {
+        // The strict pass must not break shifted-symbol chords: the
+        // braceleft binding carries no shift flag, while Ctrl+{ arrives as
+        // Key::OpenCurlyBracket with shift set (logical curly key).
+        let map = vec![(binding("braceleft", true, false), Action::GammaDown, true)];
+        let mut ctrl_shift = egui::Modifiers::CTRL;
+        ctrl_shift.shift = true;
+        assert_eq!(
+            find_binding(&map, Key::OpenCurlyBracket, ctrl_shift),
+            Some(Action::GammaDown)
+        );
+        // ...but a strictly-matching binding wins over a lenient one even
+        // when it appears later: Ctrl+[ (no shift) stays nav_10_back even
+        // though a braceleft binding leniently tolerates the event.
+        let map = vec![
+            (binding("braceleft", true, false), Action::GammaDown, true),
+            (binding("bracketleft", true, false), Action::Nav10Back, true),
+        ];
+        assert_eq!(
+            find_binding(&map, Key::OpenBracket, egui::Modifiers::CTRL),
+            Some(Action::Nav10Back)
+        );
     }
 
     // ------------------------------------------------ adjusted_image tests
