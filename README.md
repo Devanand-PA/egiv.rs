@@ -6,6 +6,14 @@ Tk application `tkiv.py`, combining an **nsxiv-like image viewer**, a
 **thumbnail gallery**, and a **dmenu-like image selector** in one program with
 three switchable modes.
 
+
+
+https://github.com/user-attachments/assets/3e85e1b2-b4ed-444b-b63c-40bd843161d4
+
+
+
+
+
 ## Modes
 
 | Mode | What it shows | Switch |
