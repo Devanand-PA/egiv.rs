@@ -765,13 +765,16 @@ impl App {
                                 .rect_stroke(rect, 0.0, stroke, egui::StrokeKind::Middle);
                             if let Some(tex) = self.thumbs.get(&idx) {
                                 let sz = tex.size_vec2();
-                                // Cover the tile: fill it completely in at
-                                // least one dimension (cropping the
-                                // overflow) instead of letterboxing the
-                                // image inside the frame.  Small images are
-                                // upscaled to fill as well.
+                                // Fit the tile: scale the image so it fits
+                                // inside the frame, filling whichever
+                                // dimension can occupy more space (the
+                                // other is letterboxed), instead of
+                                // stretching or cropping.  Thumbnails keep
+                                // their aspect ratio, so one uniform scale
+                                // suffices; small images are upscaled to
+                                // fill as well.
                                 let scale = ((tw - 5.0) / sz.x.max(1.0))
-                                    .max((th - 5.0) / sz.y.max(1.0));
+                                    .min((th - 5.0) / sz.y.max(1.0));
                                 let isz = sz * scale.max(0.01);
                                 let img_area = egui::Rect::from_min_size(
                                     rect.min,

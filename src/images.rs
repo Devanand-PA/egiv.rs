@@ -203,7 +203,36 @@ fn load_apng_frames(path: &str, max_dim: Option<u32>) -> Result<Frames, String> 
     collect_frames(dec.into_frames(), max_dim)
 }
 
-/// Gallery thumbnail: decode + fit within (max_w, max_h), RGBA.
+/// Scale (w, h) to fit within (max_w, max_h) without changing the aspect
+/// ratio ("contain"), touching one of the two bounds.  Smaller-than-tile
+/// images are upscaled so a tile is always filled in one dimension.
+fn fit_within(w: u32, h: u32, max_w: u32, max_h: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (max_w.max(1), max_h.max(1));
+    }
+    let s = (max_w.max(1) as f64 / w as f64).min(max_h.max(1) as f64 / h as f64);
+    (
+        ((w as f64 * s).round() as u32).max(1),
+        ((h as f64 * s).round() as u32).max(1),
+    )
+}
+
+/// Resize an already-decoded image into the (max_w, max_h) box while
+/// preserving its aspect ratio: the fast sampling filter on the way down,
+/// Lanczos3 on the way up.
+fn fit_thumb(img: &DynamicImage, max_w: u32, max_h: u32) -> RgbaImage {
+    let rgba = img.to_rgba8();
+    let (w, h) = fit_within(rgba.width(), rgba.height(), max_w, max_h);
+    if w < rgba.width() || h < rgba.height() {
+        image::imageops::thumbnail(&rgba, w, h)
+    } else {
+        image::imageops::resize(&rgba, w, h, image::imageops::FilterType::Lanczos3)
+    }
+}
+
+/// Gallery thumbnail: decode + fit within (max_w, max_h), RGBA.  The
+/// aspect ratio is preserved; the image fills whichever tile dimension it
+/// can while still fitting, instead of being stretched to the box.
 pub fn load_gallery_thumb(path: &str, max_w: u32, max_h: u32) -> Result<RgbaImage, String> {
     #[cfg(feature = "vips")]
     if vips_enabled() {
@@ -212,21 +241,12 @@ pub fn load_gallery_thumb(path: &str, max_w: u32, max_h: u32) -> Result<RgbaImag
         }
     }
     let img = image::open(path).map_err(|e| e.to_string())?;
-    let rgba = img.to_rgba8();
-    Ok(image::imageops::thumbnail(
-        &rgba,
-        max_w.max(1),
-        max_h.max(1),
-    ))
+    Ok(fit_thumb(&img, max_w, max_h))
 }
 
 fn fallback_thumb(path: &str, max_w: u32, max_h: u32) -> Option<RgbaImage> {
     let img = image::open(path).ok()?;
-    Some(image::imageops::thumbnail(
-        &img.to_rgba8(),
-        max_w.max(1),
-        max_h.max(1),
-    ))
+    Some(fit_thumb(&img, max_w, max_h))
 }
 
 /// (width, height) without decoding pixels.
@@ -271,7 +291,11 @@ fn disk_cache_path(path: &str, w: u32, h: u32) -> Option<PathBuf> {
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let mut hasher = Sha1::new();
-    hasher.update(format!("{path}|{mtime_ns}|{}|{w}x{h}", st.len()).as_bytes());
+    // The trailing "fit" tag versions the entry layout: older caches stored
+    // aspect-stretched thumbnails, so they must not be reused.
+    hasher.update(
+        format!("{path}|{mtime_ns}|{}|{w}x{h}|fit", st.len()).as_bytes(),
+    );
     let key = hex(&hasher.finalize());
     Some(cache_dir().join(&key[..2]).join(format!("{key}.webp")))
 }
@@ -381,6 +405,24 @@ mod tests {
         assert!(frames[0].width() <= 8 && frames[0].height() <= 8);
         let thumb = load_gallery_thumb(&s, 10, 5).unwrap();
         assert!(thumb.width() <= 10 && thumb.height() <= 5);
+        // 32x16 fits the 10x5 box exactly (same aspect ratio).
+        assert_eq!(thumb.dimensions(), (10, 5));
+        let _ = std::fs::remove_file(p);
+    }
+
+    #[test]
+    fn gallery_thumb_preserves_aspect() {
+        let p = test_png("aspect");
+        let s = p.to_string_lossy().into_owned();
+        // 32x16 in a square box: width wins, height is letterboxed.
+        let thumb = load_gallery_thumb(&s, 8, 8).unwrap();
+        assert_eq!(thumb.dimensions(), (8, 4));
+        // In a tall box the height would overfill, so the width limits.
+        let thumb = load_gallery_thumb(&s, 4, 8).unwrap();
+        assert_eq!(thumb.dimensions(), (4, 2));
+        // Small images are upscaled to fill the box in one dimension.
+        let thumb = load_gallery_thumb(&s, 64, 64).unwrap();
+        assert_eq!(thumb.dimensions(), (64, 32));
         let _ = std::fs::remove_file(p);
     }
 }
