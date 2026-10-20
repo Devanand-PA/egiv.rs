@@ -8,7 +8,7 @@ three switchable modes.
 
 
 
-https://github.com/user-attachments/assets/3e85e1b2-b4ed-444b-b63c-40bd843161d4
+<https://github.com/user-attachments/assets/3e85e1b2-b4ed-444b-b63c-40bd843161d4>
 
 
 
