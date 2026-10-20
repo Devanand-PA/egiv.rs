@@ -1003,6 +1003,15 @@ impl App {
             return;
         }
         let png = buf.into_inner();
+        // Try each helper in turn.  A candidate must be skipped not only when
+        // the binary is missing (spawn failure) but also when it starts fine
+        // yet fails: wl-copy is often present on X11-only machines (pulled
+        // in by wayland-leaning packages) and cannot open a Wayland display
+        // there.  tkiv.py falls back on the helper's non-zero exit
+        // (check=True / except: continue), but this code returned after any
+        // successful spawn, so egiv silently did nothing on such a machine
+        // while tkiv still copied.
+        let mut spawned_any = false;
         for cmd in [
             vec!["wl-copy", "--type", "image/png"],
             vec!["xclip", "-sel", "clip", "-t", "image/png"],
@@ -1017,15 +1026,27 @@ impl App {
                 Ok(c) => c,
                 Err(_) => continue,
             };
+            spawned_any = true;
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
                 let _ = stdin.write_all(&png);
             }
-            let _ = child.wait();
-            return;
+            match child.wait() {
+                Ok(st) if st.success() => return,
+                // The helper ran but failed (e.g. wl-copy without a Wayland
+                // compositor): keep trying the next candidate.
+                Ok(_) => continue,
+                Err(_) => continue,
+            }
         }
         if !self.opts.quiet {
-            eprintln!("{PROGNAME}: clipboard copy failed: neither wl-copy not xclip were found");
+            if spawned_any {
+                eprintln!(
+                    "{PROGNAME}: clipboard copy failed: the clipboard helpers exited with failure"
+                );
+            } else {
+                eprintln!("{PROGNAME}: clipboard copy failed: neither wl-copy nor xclip were found");
+            }
         }
     }
 }

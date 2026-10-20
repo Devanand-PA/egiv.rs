@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "egiv"
-version = "0.4.3"
+version = "0.4.5"
 dependencies = [
  "eframe",
  "egui",
