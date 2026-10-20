@@ -438,6 +438,30 @@ impl App {
         // navigation keys, so the ramp through the zoom levels is visible.
         let zoom_every = Duration::from_millis((repeat_ms * 4).max(120));
         for ev in events {
+            // egui-winit transforms the copy/cut/paste chords (Ctrl+C, Ctrl+X,
+            // Ctrl+V, and the desktop copy keys) into Event::Copy / Cut /
+            // Paste and then RETURNS: those chords never arrive as
+            // Event::Key, so the copy_to_clipboard binding (Ctrl+C) was
+            // unreachable.  Act on the transformed events instead; cut and
+            // paste have no bound actions and stay ignored.
+            match ev {
+                egui::Event::Copy => {
+                    // No repeat flag comes with it, so damp autorepeat: one
+                    // copy per cooldown period while the chord is held.
+                    let now = Instant::now();
+                    let cooldown = Duration::from_millis(200);
+                    if self
+                        .last_copy_at
+                        .is_none_or(|t| now.duration_since(t) >= cooldown)
+                    {
+                        self.last_copy_at = Some(now);
+                        self.run_action(Action::CopyToClipboard, ctx, win);
+                    }
+                    continue;
+                }
+                egui::Event::Cut | egui::Event::Paste(_) => continue,
+                _ => {}
+            }
             let egui::Event::Key {
                 key,
                 pressed,
@@ -640,7 +664,12 @@ impl App {
             self.contrast,
             self.frames[self.img_sel].as_raw().as_ptr() as usize
         );
-        if self.img_tex_key.as_deref() != Some(key.as_str()) {
+        // Re-upload whenever the texture was invalidated even when the content
+        // key is unchanged: run_action clears img_tex after every action, and
+        // actions that do not alter the picture (toggling the status/search
+        // bar, Ctrl+N at the last image, Ctrl+P at the first) must not leave a
+        // blank canvas until some other event changes the key.
+        if self.img_tex.is_none() || self.img_tex_key.as_deref() != Some(key.as_str()) {
             let img = adjusted_image(
                 &self.frames[self.img_sel],
                 self.brightness,
@@ -1033,7 +1062,7 @@ impl App {
             format!("  [{sl}]")
         };
         let first = if self.mode != Mode::Image {
-            if !self.filter_text.is_empty() && !self.no_searchbar {
+            if !self.filter_text.is_empty() {
                 format!("{mark}{vis_pos:0fw$}/{vis} ({all}){suffix}  {}", f.label)
             } else {
                 format!("{mark}{:0fw$}/{all}{suffix}  {}", self.fileidx + 1, f.label)
@@ -1061,7 +1090,7 @@ impl App {
             if self.frames.len() > 1 {
                 parts.push(format!("{}/{}", self.img_sel + 1, self.frames.len()));
             }
-            if !self.filter_text.is_empty() && !self.no_searchbar {
+            if !self.filter_text.is_empty() {
                 parts.push(format!("{vis_pos}/{vis} ({all})"));
             } else {
                 parts.push(format!("{:0fw$}/{all}", self.fileidx + 1));
@@ -1295,6 +1324,59 @@ mod tests {
         let mut no_ctrl = egui::Modifiers::SHIFT;
         no_ctrl.alt = true;
         assert_eq!(zoom_chord_action(Key::Num0, no_ctrl), None);
+    }
+
+    /// Build the keymaps exactly the way `App::new` does (from the default
+    /// config), so dispatch tests exercise the real lookup, not toy maps.
+    fn default_keymaps() -> (Vec<(Binding, Action, bool)>, Vec<(Binding, Action, bool)>) {
+        let cfg = crate::config::Config::default();
+        let mut keymap = Vec::new();
+        let mut keymap_direct = Vec::new();
+        for (name, specs) in cfg.merged_keys() {
+            let Some((_, action)) = crate::app::ACTION_NAMES.iter().find(|(n, _)| *n == name)
+            else {
+                continue;
+            };
+            for spec in specs {
+                if let Some(seq) = crate::keys::parse_key_spec(&spec) {
+                    if let Some(b) = Binding::from_tk_seq(&seq) {
+                        keymap.push((b.clone(), *action, false));
+                        keymap_direct.push((b, *action, true));
+                    }
+                    if let Some(dk) = crate::keys::to_direct_key(&seq) {
+                        if let Some(b) = Binding::from_tk_seq(&dk) {
+                            keymap_direct.push((b, *action, true));
+                        }
+                    }
+                }
+            }
+        }
+        (keymap, keymap_direct)
+    }
+
+    #[test]
+    fn ctrl_c_dispatches_copy_in_both_modes() {
+        // copy_to_clipboard must actually resolve from the DEFAULT keymap in
+        // both searchbar modes: bar visible (keymap) and bar hidden
+        // (keymap_direct).  It regressed once because matching looked fine in
+        // toy maps but the real map is built through tk-name translation.
+        let ctrl = egui::Modifiers::CTRL;
+        let (keymap, keymap_direct) = default_keymaps();
+        assert_eq!(
+            find_binding(&keymap, Key::C, ctrl),
+            Some(Action::CopyToClipboard)
+        );
+        assert_eq!(
+            find_binding(&keymap_direct, Key::C, ctrl),
+            Some(Action::CopyToClipboard)
+        );
+        // With Shift held it must NOT be treated as plain copy (shift parity).
+        let mut ctrl_shift = ctrl;
+        ctrl_shift.shift = true;
+        assert_ne!(
+            find_binding(&keymap_direct, Key::C, ctrl_shift),
+            Some(Action::CopyToClipboard)
+        );
     }
 
     #[test]

@@ -98,6 +98,11 @@ pub struct App {
     origins: HashMap<String, (u32, u32)>,
     mtimes: HashMap<usize, u128>,
     last_autoreload: Instant,
+    /// Timestamp of the last clipboard-copy action.  egui-winit delivers
+    /// Ctrl+C as `Event::Copy` without the repeat flag a regular Key event
+    /// carries, so holding the chord would re-spawn the clipboard helper on
+    /// every autorepeat event; this cooldown damps that.
+    last_copy_at: Option<Instant>,
 
     // gallery
     thumbs: HashMap<usize, TextureHandle>,
@@ -320,6 +325,7 @@ impl App {
             origins: HashMap::new(),
             mtimes: HashMap::new(),
             last_autoreload: Instant::now(),
+            last_copy_at: None,
             thumbs: HashMap::new(),
             thumb_in_flight: HashSet::new(),
             gallery_tile_override: opts.thumb_size.filter(|t| *t > 0).map(|t| t as f32),
@@ -452,7 +458,7 @@ impl App {
         let first = n_before == 0;
         let new_entries: Vec<FileEntry> = paths.into_iter().map(FileEntry::new).collect();
         self.files.extend(new_entries);
-        if self.filter_text.is_empty() && !self.no_searchbar {
+        if self.filter_text.is_empty() {
             self.visible.extend(n_before..self.files.len());
         } else {
             self.rebuild_visible();
@@ -490,7 +496,7 @@ impl App {
     }
 
     pub fn rebuild_visible(&mut self) {
-        self.visible = model::filter_visible(&self.files, &self.filter_text, self.no_searchbar);
+        self.visible = model::filter_visible(&self.files, &self.filter_text);
     }
 
     fn apply_sort(&mut self, mode: Option<SortMode>, reverse: Option<bool>, refresh: bool) {
@@ -1218,11 +1224,12 @@ impl App {
             Action::FitHeight => self.act_fit(ScaleMode::Height),
             Action::ToggleAlpha => self.alpha_layer = !self.alpha_layer,
             Action::ToggleSearchbar => {
+                // Show/hide the bar only.  An active search stays applied
+                // whether the bar is visible or hidden; only an empty search
+                // shows every file.  Esc clears the search while the bar is
+                // focused.
                 self.no_searchbar = !self.no_searchbar;
-                if self.no_searchbar {
-                    self.filter_text.clear();
-                    self.rebuild_visible();
-                }
+                self.rebuild_visible();
             }
             Action::ModeCycleFwd => self.cycle_mode(1),
             Action::ModeCycleRev => self.cycle_mode(-1),

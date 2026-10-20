@@ -126,11 +126,10 @@ pub fn mtime_nanos(p: &Path) -> i128 {
 // ---------------------------------------------------------------- filtering
 
 /// Rebuild visible indices from the filter text (all whitespace-separated
-/// terms must appear in label or path, case-insensitive).
-pub fn filter_visible(files: &[FileEntry], filter_text: &str, no_searchbar: bool) -> Vec<usize> {
-    if no_searchbar {
-        return (0..files.len()).collect();
-    }
+/// terms must appear in label or path, case-insensitive).  The filter is
+/// active whenever the query text is non-empty, regardless of whether the
+/// search bar is currently hidden or shown.
+pub fn filter_visible(files: &[FileEntry], filter_text: &str) -> Vec<usize> {
     let query = filter_text.to_lowercase();
     let terms: Vec<&str> = query.split_whitespace().collect();
     if terms.is_empty() {
@@ -417,13 +416,11 @@ mod tests {
             FileEntry::new("/tmp/dogs/rex.png".into()),
             FileEntry::new("/tmp/cats/mittens.png".into()),
         ];
-        assert_eq!(filter_visible(&files, "", false), vec![0, 1, 2]);
-        assert_eq!(filter_visible(&files, "rex", false), vec![1]);
-        assert_eq!(filter_visible(&files, "cats", false), vec![0, 2]);
-        assert_eq!(filter_visible(&files, "cats mit", false), vec![2]);
-        assert_eq!(filter_visible(&files, "nope", false), Vec::<usize>::new());
-        // no_searchbar ignores the query
-        assert_eq!(filter_visible(&files, "rex", true), vec![0, 1, 2]);
+        assert_eq!(filter_visible(&files, ""), vec![0, 1, 2]);
+        assert_eq!(filter_visible(&files, "rex"), vec![1]);
+        assert_eq!(filter_visible(&files, "cats"), vec![0, 2]);
+        assert_eq!(filter_visible(&files, "cats mit"), vec![2]);
+        assert_eq!(filter_visible(&files, "nope"), Vec::<usize>::new());
     }
 
     #[test]

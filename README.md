@@ -60,13 +60,14 @@ Selector-only flags include `--pre-select`, `--pre-select-file` and
 |---|---|
 | `Tab` / `Shift+Tab` | cycle mode (image → gallery → list) |
 | `Return` | open selection / toggle image ↔ gallery |
-| `Esc` | clear filter, or quit if empty |
-| `Ctrl+F` | show / hide the search bar (starts hidden) |
+| `Esc` | while the search bar is focused: clear filter (quit if empty); otherwise quit |
+| `Ctrl+F` | show / hide the search bar (starts hidden; a non-empty search stays applied even while the bar is hidden, `Esc` while the bar is focused clears it) |
 | `Ctrl+Q` | quit |
 | `F11` | fullscreen |
 | `Ctrl+B` | toggle status bar |
 | `Ctrl+R` | reload |
 | `Ctrl+D` | remove current or marked files |
+| `Ctrl+C` | copy the current image to the clipboard (via `wl-copy` or `xclip`) |
 | `Ctrl+N` / `Ctrl+P` | next / previous (respects filter) |
 | `Ctrl+H/J/K/L` | pan |
 | `Ctrl+plus` / `Ctrl+minus` / `Ctrl+0` | zoom in / out / 100% (image mode: picture levels; gallery mode: thumbnail size) — hold to repeat |
