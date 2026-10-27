@@ -118,6 +118,10 @@ pub struct App {
     /// the previous frame; used to compute make-visible scrolling like
     /// tkiv.py _apply_gallery_scroll.
     gallery_last_offset_y: f32,
+    /// (cols, row stride) as last laid out in gallery mode.  A change
+    /// (window resize, tile-size change, aspect arrival) moves every
+    /// row, so the selection is re-checked for visibility then.
+    gallery_last_layout: (usize, f32),
 
     // list mode
     list_preview: Option<TextureHandle>,
@@ -336,6 +340,7 @@ impl App {
             gallery_scroll_to: None,
             gallery_cols: 1,
             gallery_last_offset_y: 0.0,
+            gallery_last_layout: (0, 0.0),
             list_preview: None,
             list_pending: -1,
             list_scroll_to: None,
@@ -1274,8 +1279,11 @@ impl App {
     }
 
     fn row_h(&self, win: Vec2) -> f32 {
-        let _ = win;
-        let (_, th, cap, pad) = self.tile_metrics(egui::Vec2::new(1.0, 1.0), true);
+        // Real gallery metrics for the current window, so PageUp/Down
+        // step by the number of rows actually visible.  (This used to
+        // probe with a 1x1 window, which clamped every tile to
+        // GALLERY_TILE_MIN and made a "page" a fixed ~124px.)
+        let (_, th, cap, pad) = self.tile_metrics(win, true);
         th + cap + pad
     }
 

@@ -112,6 +112,41 @@ fn zoom_chord_action(key: Key, mods: egui::Modifiers) -> Option<Action> {
     }
 }
 
+/// Minimal scroll offset that brings the gallery row spanning
+/// [row_top, row_top + tile_h) fully inside the viewport
+/// [y_top, y_top + vh), the tkiv.py `_apply_gallery_scroll` /
+/// listbox.see() behaviour.  Returns `None` when the row is already
+/// fully visible (or within half a pixel of it), so the gallery does
+/// not move at all in that case.
+///
+/// A row taller than the viewport (tiny window, huge tiles) cannot
+/// ever fit; then its top is shown (the image, not the caption).
+fn gallery_scroll_target(row_top: f32, tile_h: f32, vh: f32, y_top: f32) -> Option<f32> {
+    let row_bottom = row_top + tile_h;
+    let new_top = if row_top < y_top {
+        // Row starts above the viewport: align its top with the top.
+        row_top
+    } else if row_bottom > y_top + vh {
+        if tile_h >= vh {
+            // Taller than the viewport: it can never fit, top-align.
+            row_top
+        } else {
+            // Row ends below the viewport: align its bottom with the
+            // bottom, the minimal scroll.
+            row_bottom - vh
+        }
+    } else {
+        // Already fully in frame.
+        return None;
+    };
+    let new_top = new_top.max(0.0);
+    if (new_top - y_top).abs() > 0.5 {
+        Some(new_top)
+    } else {
+        None
+    }
+}
+
 /// Port of tkiv.py `_prepare_crop` colour adjustments.  Each enhancement is
 /// applied ONLY when its step value is non-zero, exactly like the Python
 /// code — the neutral value of one adjustment must not corrupt the others:
@@ -737,35 +772,54 @@ impl App {
             return;
         }
         let (tw, th, cap, pad) = self.tile_metrics(win, false);
-        let cols = (((win.x - pad) / (tw + pad)).floor() as usize).max(1);
+        // egui puts item_spacing.x between the tiles of a row (after each
+        // tile's add_space(pad)), so the true stride of one tile is
+        // tw + item_spacing.x + pad.  Counting columns with the bare
+        // tw + pad stride let rows grow wider than the viewport and get
+        // the last column clipped.
+        let sx = ui.spacing().item_spacing.x;
+        let cols = (((win.x - pad + sx) / (tw + pad + sx)).floor() as usize).max(1);
         self.gallery_cols = cols;
-        let row_h = th + cap + pad;
+        // One row is the tile widget itself: image plus caption.  egui
+        // separates the row widgets with item_spacing.y (default 3px) --
+        // add_space(pad) inside ui.horizontal only advances the
+        // horizontal cursor, so it never widened the gaps between rows.
+        // Give the gallery a vertical gap of exactly `pad` and hand
+        // show_rows the *widget* height: egui then assumes (and lays
+        // out) a stride of tile_h + pad, matching tile_metrics' budget
+        // (GALLERY_PAD_RATIO) and the make-visible math below exactly.
+        ui.spacing_mut().item_spacing.y = pad;
+        let tile_h = th + cap;
+        let row_h = tile_h + pad;
         let rows = self.visible.len().div_ceil(cols);
-        // Make the selected row visible, mirroring tkiv.py
-        // _apply_gallery_scroll: only scroll when the row lies outside the
-        // viewport, and only as far as needed.  egui's scroll_to_rect must
-        // run inside the ScrollArea, so instead the target offset is
-        // computed here (against the previous frame's offset) and applied
-        // through ScrollArea::vertical_scroll_offset.
+        // Keep the selected row fully in frame, mirroring tkiv.py
+        // _apply_gallery_scroll: scroll only when the row lies outside
+        // the viewport, and only as far as needed.  egui's scroll_to_rect
+        // must run inside the ScrollArea (and show_rows only lays out the
+        // rows egui itself deems visible), so the target offset is
+        // computed here -- against the previous frame's offset, with the
+        // same stride the rows are laid out with -- and applied through
+        // ScrollArea::vertical_scroll_offset.
+        let layout_changed = self.gallery_last_layout != (cols, row_h);
+        self.gallery_last_layout = (cols, row_h);
+        let want_visible = self
+            .gallery_scroll_to
+            .or(if layout_changed && self.fileidx < self.files.len() {
+                Some(self.fileidx)
+            } else {
+                None
+            });
         let mut scroll_to: Option<f32> = None;
-        if let Some(idx) = self.gallery_scroll_to {
+        if let Some(idx) = want_visible {
             if let Some(pos) = self.visible.iter().position(|&i| i == idx) {
                 let row = pos / cols.max(1);
                 let row_top = row as f32 * row_h;
-                let row_bottom = row_top + row_h;
-                let vh = win.y.max(1.0);
-                let y_top = self.gallery_last_offset_y;
-                let y_bot = y_top + vh;
-                let new_top = if row_top < y_top {
-                    row_top
-                } else if row_bottom > y_bot {
-                    row_bottom - vh
-                } else {
-                    y_top
-                };
-                if (new_top - y_top).abs() > 0.5 {
-                    scroll_to = Some(new_top.max(0.0));
-                }
+                scroll_to = gallery_scroll_target(
+                    row_top,
+                    tile_h,
+                    win.y.max(1.0),
+                    self.gallery_last_offset_y,
+                );
             }
         }
         let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
@@ -773,7 +827,7 @@ impl App {
             scroll = scroll.vertical_scroll_offset(off);
         }
         let out = scroll
-            .show_rows(ui, row_h, rows, |ui, row_range| {
+            .show_rows(ui, tile_h, rows, |ui, row_range| {
                 for row in row_range {
                     ui.horizontal(|ui| {
                         for col in 0..cols {
@@ -856,6 +910,11 @@ impl App {
                             if resp.clicked() {
                                 self.fileidx = idx;
                                 self.persist_index();
+                                // A click can land on a tile that is only
+                                // partially inside the viewport (its
+                                // caption cut off at the bottom edge);
+                                // make the new selection fully visible.
+                                self.gallery_scroll_to = Some(idx);
                                 if self.opts.purpose == Purpose::Select
                                     && resp.ctx.input(|i| i.modifiers.ctrl)
                                 {
@@ -1506,5 +1565,151 @@ mod tests {
         let src = image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 200, 200, 77]));
         let out = adjusted_image(&src, 0, 0, 1);
         assert_eq!(out.get_pixel(0, 0)[3], 77);
+    }
+
+    // ------------------------------------------------ gallery scroll tests
+
+    #[test]
+    fn gallery_scroll_target_scrolls_minimally() {
+        // Fully inside the viewport: no scroll at all.
+        assert_eq!(gallery_scroll_target(100.0, 50.0, 300.0, 50.0), None);
+        // Sub-half-pixel overshoot is not worth a scroll either.
+        assert_eq!(gallery_scroll_target(99.8, 50.0, 300.0, 100.0), None);
+        // Row starts above the viewport: align its top with the top.
+        assert_eq!(gallery_scroll_target(80.0, 50.0, 300.0, 100.0), Some(80.0));
+        // Row ends below the viewport: align its bottom with the bottom
+        // (row span [360, 410], viewport [100, 400] -> scroll to 110).
+        assert_eq!(
+            gallery_scroll_target(360.0, 50.0, 300.0, 100.0),
+            Some(110.0)
+        );
+        // Row taller than the viewport: it can never fit; show its top
+        // (the image, not the caption slice).
+        assert_eq!(
+            gallery_scroll_target(120.0, 500.0, 300.0, 0.0),
+            Some(120.0)
+        );
+        assert_eq!(
+            gallery_scroll_target(20.0, 500.0, 300.0, 100.0),
+            Some(20.0)
+        );
+    }
+
+    /// Drive a real egui context the way `render_gallery` does -- same
+    /// spacing override, same show_rows call -- and verify that the rows
+    /// land exactly at the offsets the make-visible math assumes, and
+    /// that scrolling a deep row into frame really frames it.
+    #[test]
+    fn gallery_layout_matches_row_math() {
+        let (tw, th, cap, pad) = (128.0, 96.0, 22.0, 8.0);
+        let tile_h = th + cap;
+        let row_h = tile_h + pad;
+        let cols = 4usize;
+        let rows = 40usize; // 160 tiles, far more than the viewport shows
+        let sel_row = 25usize;
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(egui::FontDefinitions::empty());
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(1000.0, 600.0),
+            )),
+            ..Default::default()
+        };
+
+        // (row -> top of the row's first tile, in content coordinates)
+        let mut tops: Vec<(usize, f32)> = Vec::new();
+        let mut offset = 0.0f32;
+        let mut vh = 0.0f32;
+
+        for pass in 0..3 {
+            // Row the app wants fully visible this pass; pass 0 just
+            // measures the initial (unscrolled) layout.
+            let want_row = match pass {
+                0 => 0,
+                1 => sel_row,
+                _ => 2,
+            };
+            let target = if pass == 0 {
+                None
+            } else {
+                gallery_scroll_target(want_row as f32 * row_h, tile_h, vh, offset)
+            };
+            tops.clear();
+            let _ = ctx.run(raw.clone(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.spacing_mut().item_spacing.y = pad;
+                    let mut scroll = egui::ScrollArea::vertical().auto_shrink([false, false]);
+                    if let Some(off) = target {
+                        scroll = scroll.vertical_scroll_offset(off);
+                    }
+                    let out = scroll.show_rows(ui, tile_h, rows, |ui, row_range| {
+                        for row in row_range {
+                            ui.horizontal(|ui| {
+                                for col in 0..cols {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(tw, tile_h),
+                                        egui::Sense::hover(),
+                                    );
+                                    if col == 0 {
+                                        tops.push((row, rect.min.y));
+                                    }
+                                    ui.add_space(pad);
+                                }
+                            });
+                        }
+                    });
+                    let inner_min_y = out.inner_rect.min.y;
+                    for (_, y) in tops.iter_mut() {
+                        // Screen -> content coordinates.
+                        *y = *y - inner_min_y + out.state.offset.y;
+                    }
+                    offset = out.state.offset.y;
+                    vh = out.inner_rect.height();
+                });
+            });
+
+            // Every laid-out row sits exactly at row * row_h -- the
+            // invariant the make-visible math relies on.  (With the old
+            // code -- show_rows told the rows were th+cap+pad tall while
+            // egui actually spaced them th+cap+3 -- deep rows drifted
+            // ever further away from these offsets.)
+            for &(row, y) in &tops {
+                assert!(
+                    (y - row as f32 * row_h).abs() < 0.01,
+                    "pass {pass}: row {row} top {y} != {}",
+                    row as f32 * row_h
+                );
+            }
+
+            if pass == 0 {
+                // Sanity: the viewport is scrollable and the model rows
+                // are sane, then compute the target for a deep row.
+                assert!(vh > 100.0);
+                assert_eq!(offset, 0.0);
+                assert!(rows as f32 * row_h - pad > vh, "must be scrollable");
+            } else {
+                let want_top = want_row as f32 * row_h;
+                assert!(
+                    tops.iter().any(|&(r, _)| r == want_row),
+                    "pass {pass}: row {want_row} not laid out"
+                );
+                let top = want_top;
+                let bottom = top + tile_h;
+                assert!(
+                    top >= offset - 0.01 && bottom <= offset + vh + 0.01,
+                    "pass {pass}: row [{top}, {bottom}] not inside viewport \
+                     [{offset}, {}]",
+                    offset + vh
+                );
+                assert!(
+                    (offset - target.unwrap()).abs() < 0.01,
+                    "pass {pass}: offset {} != target {}",
+                    offset,
+                    target.unwrap()
+                );
+            }
+        }
     }
 }
