@@ -1,6 +1,6 @@
 [package]
 name = "egiv"
-version = "0.4.5-aplha-2"
+version = "0.4.5-aplha-3"
 edition = "2021"
 description = "Combined image viewer (nsxiv-like) and image selector (dmenu-like), written in Rust with egui/eframe"
 

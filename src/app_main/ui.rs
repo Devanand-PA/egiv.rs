@@ -112,6 +112,26 @@ fn zoom_chord_action(key: Key, mods: egui::Modifiers) -> Option<Action> {
     }
 }
 
+/// The action of the fixed (non-configurable) Enter chord.
+///
+/// Ctrl+Enter toggles a mark - the same multi-select action as Ctrl+M from
+/// the keymap - in BOTH searchbar modes.  It used to be gated behind
+/// `!self.no_searchbar`, a leftover from the time when the search bar
+/// started visible and "hidden" only meant the opt-in `--no-searchbar`
+/// direct-key mode.  Since the bar starts hidden by default
+/// (see `App::new`), that guard never matched, so the chord fell through
+/// to plain Enter: it switched image <-> gallery in the viewer and
+/// *accepted and exited* in the selector instead of marking the current
+/// file.  Whether the bar is shown only decides whether typed letters
+/// filter the list, never which fixed chords exist.
+fn enter_key_action(mods: egui::Modifiers) -> Action {
+    if mods.ctrl || mods.mac_cmd {
+        Action::ToggleMark
+    } else {
+        Action::Return
+    }
+}
+
 /// Minimal scroll offset that brings the gallery row spanning
 /// [row_top, row_top + tile_h) fully inside the viewport
 /// [y_top, y_top + vh), the tkiv.py `_apply_gallery_scroll` /
@@ -626,10 +646,7 @@ impl App {
                 Key::End => self.run_action(Action::Last, ctx, win),
                 Key::Tab if mods.shift => self.run_action(Action::ModeCycleRev, ctx, win),
                 Key::Tab => self.run_action(Action::ModeCycleFwd, ctx, win),
-                Key::Enter if !self.no_searchbar && mods.ctrl => {
-                    self.run_action(Action::ToggleMark, ctx, win)
-                }
-                Key::Enter => self.run_action(Action::Return, ctx, win),
+                Key::Enter => self.run_action(enter_key_action(mods), ctx, win),
                 Key::Escape => self.run_action(Action::Escape, ctx, win),
                 Key::Delete => self.run_action(Action::DeleteKey, ctx, win),
                 _ => {}
