@@ -56,12 +56,16 @@ pub enum Purpose {
 // ---------------------------------------------------------------- messages
 
 pub(crate) enum Msg {
+    /// A "load this image now" job finished.  Deliberately carries no
+    /// request token: whether the frames are still wanted is decided by the
+    /// index and the file-generation, which is both sufficient and cannot
+    /// disagree with the request it belongs to.  See `load_image_async`.
     Loaded {
-        token: u64,
         idx: usize,
         gen: u64,
         res: Result<Frames, String>,
     },
+    /// A prefetch job finished.  Also token-less, for the same reason.
     Prefetch {
         idx: usize,
         gen: u64,

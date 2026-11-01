@@ -250,19 +250,26 @@ impl App {
     fn drain_messages(&mut self, ctx: &egui::Context) {
         while let Ok(msg) = self.rx.try_recv() {
             match msg {
-                Msg::Loaded {
-                    token,
-                    idx,
-                    gen,
-                    res,
-                } => {
-                    self.in_flight.remove(&idx);
-                    if token != self.load_token
-                        || gen != self.files_gen
-                        || idx >= self.files.len()
-                        || self.quitting
-                    {
-                        self.pending_load = None;
+                Msg::Loaded { idx, gen, res } => {
+                    self.load_in_flight.remove(&idx);
+                    // Accept on the INDEX: the only question is whether these
+                    // frames are for the file the user is currently looking
+                    // at (`idx == fileidx`), plus the generation check that
+                    // the list has not been reordered/trimmed since the job
+                    // started.  Comparing request tokens instead is what froze
+                    // the picture -- `load_image_async` can adopt a job that is
+                    // already decoding `idx`, and that job's captured token no
+                    // longer matched the current one.
+                    let current =
+                        idx == self.fileidx && gen == self.files_gen && idx < self.files.len();
+                    if !current || self.quitting {
+                        // Stale reply: the visible selection has moved on (or
+                        // the list was reordered/trimmed).  Nothing to install,
+                        // but never drop the record of a request that is still
+                        // being served.
+                        if self.pending_load == Some(idx) {
+                            self.pending_load = None;
+                        }
                         continue;
                     }
                     self.pending_load = None;
@@ -283,6 +290,7 @@ impl App {
                                 self.frames.clear();
                                 self.img_w = 0;
                                 self.img_h = 0;
+                                self.installed_idx = None;
                                 ctx.request_repaint();
                             } else if self.remove_file(idx, false) {
                                 if self.fileidx >= self.files.len() {
@@ -294,13 +302,19 @@ impl App {
                     }
                 }
                 Msg::Prefetch { idx, gen, res } => {
-                    self.in_flight.remove(&idx);
+                    self.prefetch_in_flight.remove(&idx);
                     if gen != self.files_gen || self.quitting {
                         continue;
                     }
-                    let wanted = self.pending_load == Some((idx, self.load_token));
+                    // Same index-based test: a prefetch reply describes the
+                    // image the user is on iff `idx == fileidx`.  The old
+                    // `pending_load`/token comparison could be false for the
+                    // selected index (a late `Msg::Loaded` wiped
+                    // `pending_load`), which made the app cache the frames
+                    // instead of showing them.
+                    let current = idx == self.fileidx && idx < self.files.len();
                     match res {
-                        Ok((frames, delays)) if wanted && self.mode == Mode::Image => {
+                        Ok((frames, delays)) if current && self.mode == Mode::Image => {
                             self.pending_load = None;
                             self.install_image(idx, frames, delays);
                             self.persist_index();
@@ -308,6 +322,9 @@ impl App {
                             ctx.request_repaint();
                         }
                         Ok(frames) => {
+                            // Not the image on screen (the selection moved
+                            // on, or we are not in image mode): keep the
+                            // decoded frames under this index for later.
                             if let std::collections::hash_map::Entry::Vacant(v) =
                                 self.prefetch.entry(idx)
                             {
@@ -321,7 +338,7 @@ impl App {
                                 }
                             }
                         }
-                        Err(e) if wanted => {
+                        Err(e) if current => {
                             self.pending_load = None;
                             if !self.opts.quiet {
                                 eprintln!("{PROGNAME}: {}: {e}", self.files[idx].path);
@@ -357,7 +374,7 @@ impl App {
                         self.apply_sort(None, None, true);
                     }
                     if self.mode == Mode::List {
-                        self.list_pending = -2;
+                        self.invalidate_list_preview();
                     }
                     ctx.request_repaint();
                 }
@@ -387,13 +404,25 @@ impl App {
                     match res {
                         Ok((frames, _)) if !frames.is_empty() => {
                             self.list_preview = Some(upload(ctx, "list-preview", &frames[0], true));
+                            self.list_preview_idx = Some(idx);
                         }
-                        _ => self.list_preview = None,
+                        _ => {
+                            self.list_preview = None;
+                            // The request was answered (with nothing), so
+                            // record it as satisfied and do not spin.
+                            self.list_preview_idx = Some(idx);
+                        }
                     }
+                    self.list_pending = -1;
                     ctx.request_repaint();
                 }
             }
         }
+        // Liveness nets: never leave the selected image uninstalled or the
+        // list preview stale.  These are cheap no-ops once the picture is in
+        // sync with the selection.
+        self.ensure_current_load();
+        self.ensure_list_preview();
     }
 
     fn handle_timers(&mut self, ctx: &egui::Context) {
@@ -461,7 +490,7 @@ impl App {
                     self.load_image_async(self.fileidx);
                 }
                 Mode::Gallery => self.gallery_scroll_to = Some(self.fileidx),
-                Mode::List => self.list_pending = -2,
+                Mode::List => self.invalidate_list_preview(),
             }
         }
         ctx.request_repaint();
@@ -968,7 +997,11 @@ impl App {
             self.fileidx = self.visible[0];
             self.persist_index();
         }
-        if self.list_pending == -2 {
+        // Request the preview whenever the pixels on screen are not the ones
+        // for the current selection.  This is self-healing: if a reply was
+        // lost or dropped (mode switch mid-flight) the pane re-requests
+        // instead of freezing on a stale image.
+        if self.list_preview_idx != Some(self.fileidx) {
             self.submit_list_preview();
             if self.fileidx < self.files.len() {
                 // Selection changed (navigation, sort, filter, removal):
@@ -1061,7 +1094,7 @@ impl App {
                                 if resp.clicked() {
                                     self.fileidx = idx;
                                     self.persist_index();
-                                    self.list_pending = -2;
+                                    self.invalidate_list_preview();
                                 }
                                 resp.context_menu(|ui| {
                                     if ui.button("Copy").clicked() {
@@ -1100,8 +1133,22 @@ impl App {
         self.list_scroll_to = None;
     }
 
+    /// Drop the current list preview so that the next render re-requests the
+    /// one for the selected index.  Used whenever the selection changed or the
+    /// file list was reordered/trimmed, i.e. whenever the pixels on screen may
+    /// describe a different file than `fileidx`.
+    pub(crate) fn invalidate_list_preview(&mut self) {
+        self.list_pending = -1;
+        self.list_preview_idx = None;
+        self.list_preview = None;
+    }
+
     fn submit_list_preview(&mut self) {
         if self.fileidx >= self.files.len() {
+            return;
+        }
+        // One submission per selection: `-1` means "nothing in flight".
+        if self.list_pending == self.fileidx as i64 {
             return;
         }
         self.list_pending = self.fileidx as i64;
@@ -1109,10 +1156,30 @@ impl App {
         let path = self.files[idx].path.clone();
         let tx = self.tx.clone();
         let max_dim = self.cfg_behavior["max_load_dim"] as u32;
-        std::thread::spawn(move || {
+        // Through the bounded worker pool, not a raw `std::thread::spawn`:
+        // navigating a large collection used to start one OS thread per
+        // step, each holding a decoded image, which is what made list mode
+        // collapse once thousands of images had been stepped through.
+        self.spawn_limited(move || {
             let res = images::load_frames(&path, Some(max_dim.min(2048)));
             let _ = tx.send(Msg::ListPreview { idx, res });
         });
+    }
+
+    /// Liveness net for list mode, mirroring `ensure_current_load`.
+    ///
+    /// The preview follows `fileidx`; if a reply was dropped (mode switch in
+    /// mid-flight, a lost message) nothing used to re-request it and the pane
+    /// froze on the last picture while the selection kept moving.
+    fn ensure_list_preview(&mut self) {
+        if self.mode != Mode::List || self.files.is_empty() || self.quitting {
+            return;
+        }
+        let idx = self.fileidx.min(self.files.len() - 1);
+        if self.list_preview_idx == Some(idx) {
+            return;
+        }
+        self.submit_list_preview();
     }
 
     fn status_line(&mut self) -> (String, String) {
@@ -1298,7 +1365,12 @@ impl eframe::App for App {
                 Mode::Gallery => self.render_gallery(ui),
                 Mode::List => self.render_list(ui),
             });
-        if self.lazy_scan_active || !self.thumb_in_flight.is_empty() || !self.in_flight.is_empty() {
+        if self.lazy_scan_active
+            || !self.thumb_in_flight.is_empty()
+            || !self.load_in_flight.is_empty()
+            || !self.prefetch_in_flight.is_empty()
+            || self.list_pending >= 0
+        {
             ctx.request_repaint_after(QUEUE_POLL);
         }
     }
@@ -1728,5 +1800,187 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- async load
+// Regression tests for the "selection advances but the picture freezes"
+// stall reported with large collections (6000+ images).
+
+#[cfg(test)]
+mod async_load_tests {
+    use super::*;
+    use crate::cli::ViewerOpts;
+    use crate::images;
+    use egui::Context as EguiContext;
+
+    /// A tiny real PNG so `install_image` / `upload` have real pixels.
+    fn test_png(name: &str, seed: u8) -> String {
+        let dir = std::env::temp_dir().join(format!(
+            "egiv-async-load-{}-{name}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{name}.png"));
+        let mut img = image::RgbaImage::new(24, 16);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            *p = image::Rgba([(x * seed as u32) as u8, (y * seed as u32) as u8, seed, 255]);
+        }
+        img.save(&path).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    fn app_for(files: Vec<crate::model::FileEntry>) -> App {
+        let mut vo = ViewerOpts::default();
+        vo.shared.thumb_mode = false;
+        vo.shared.list_mode = false;
+        vo.assume_files = false;
+        let opts = crate::app::opts_from_viewer(&vo);
+        App::new_inner(opts, files, Vec::new(), None, false, None)
+    }
+
+    /// Get image mode running with image 0 installed and NO background jobs
+    /// in flight: `visible` holds only index 0, so `prefetch_neighbors` has
+    /// no neighbour to submit.  Every message the test then observes is one it
+    /// injected itself.
+    fn seeded_app(n: usize) -> (App, Vec<String>, EguiContext) {
+        let paths: Vec<String> = (0..n)
+            .map(|i| test_png(&format!("p{i}"), (i * 40) as u8 + 1))
+            .collect();
+        let files: Vec<crate::model::FileEntry> =
+            paths.iter().map(|p| crate::model::FileEntry::new(p.clone())).collect();
+        let mut app = app_for(files);
+        let ctx = EguiContext::default();
+        assert_eq!(app.mode, Mode::Image);
+        app.visible = vec![0];
+        app.fileidx = 0;
+        // Install image 0 through the real load path.
+        assert!(app.load_image_async(0));
+        for _ in 0..600 {
+            app.drain_messages(&ctx);
+            if app.installed_idx == Some(0) {
+                return (app, paths, ctx);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("image 0 never installed");
+    }
+
+    /// The reported bug, reproduced deterministically through the real
+    /// `load_image_async` / `drain_messages` code:
+    ///
+    /// 1. a prefetch job for the next image is still decoding, so navigating
+    ///    to it takes the "already in flight" path instead of spawning;
+    /// 2. the slow worker for the *previous* image then replies late, after
+    ///    the selection already moved on;
+    /// 3. the frames for the selected image then arrive as `Msg::Prefetch`.
+    ///
+    /// Originally step 2 wiped `pending_load`, so step 3 decided the frames
+    /// were not wanted and merely cached them: `fileidx` (status bar)
+    /// advanced, `install_image` never ran, the picture froze.
+    #[test]
+    fn stale_loaded_reply_does_not_freeze_the_selected_image() {
+        let (mut app, paths, ctx) = seeded_app(4);
+        assert_eq!(app.installed_idx, Some(0));
+        assert_eq!(app.fileidx, 0);
+
+        // A prefetch for image 1 is running: navigating to it defers to that
+        // job rather than starting a second decode.
+        app.prefetch_in_flight.insert(1);
+        assert!(app.load_image_async(1));
+        assert_eq!(app.fileidx, 1, "status bar follows the selection");
+        assert!(app.prefetch_in_flight.contains(&1));
+
+        let (frames1, delays1) = images::load_frames(&paths[1], None).unwrap();
+        let gen = app.files_gen;
+
+        // The slow worker for image 0 reports late, after the selection has
+        // already moved to image 1.  It must be ignored without disturbing
+        // the pending request for image 1.
+        app.tx
+            .send(Msg::Loaded {
+                idx: 0,
+                gen,
+                res: Ok(images::load_frames(&paths[0], None).unwrap()),
+            })
+            .unwrap();
+
+        // Then the prefetch reply for the selected image arrives.
+        app.tx
+            .send(Msg::Prefetch {
+                idx: 1,
+                gen,
+                res: Ok((frames1, delays1)),
+            })
+            .unwrap();
+
+        app.drain_messages(&ctx);
+
+        assert_eq!(app.fileidx, 1, "the status bar keeps tracking the selection");
+        assert_eq!(
+            app.installed_idx,
+            Some(1),
+            "the rendered image must follow the selection; a stale Msg::Loaded \
+             reply must not discard the pending request"
+        );
+    }
+
+    /// The adopted-job case: a worker was already decoding the index we
+    /// navigate to, so the request is adopted rather than restarted.  Its
+    /// reply must install the image.
+    #[test]
+    fn adopted_worker_reply_is_not_rejected_by_its_own_token() {
+        let (mut app, paths, ctx) = seeded_app(3);
+        assert_eq!(app.installed_idx, Some(0));
+
+        // A load job for image 1 is already running (started earlier, e.g. by
+        // a previous navigation that was superseded).
+        app.load_in_flight.insert(1);
+
+        // Navigate to 1: adopt the running job instead of starting a second
+        // decode of the same file.
+        assert!(app.load_image_async(1));
+        assert_eq!(app.fileidx, 1);
+        assert!(app.load_in_flight.contains(&1));
+        assert_eq!(app.pending_load, Some(1));
+
+        // The adopted worker answers with the index it was started for.
+        app.tx
+            .send(Msg::Loaded {
+                idx: 1,
+                gen: app.files_gen,
+                res: Ok(images::load_frames(&paths[1], None).unwrap()),
+            })
+            .unwrap();
+        app.drain_messages(&ctx);
+
+        assert_eq!(app.installed_idx, Some(1));
+    }
+
+    /// Liveness net: even if a reply is lost outright (a message that never
+    /// arrives), the selected image must still end up on screen.
+    #[test]
+    fn lost_reply_still_redelivers_the_selected_image() {
+        let (mut app, _paths, ctx) = seeded_app(3);
+        assert_eq!(app.installed_idx, Some(0));
+
+        // Navigate, and then simply drop the reply (nothing sends a message).
+        app.prefetch_in_flight.insert(1);
+        assert!(app.load_image_async(1));
+        assert_eq!(app.fileidx, 1);
+
+        // The worker "finished" and removed itself from in-flight without a
+        // reply (the channel send was lost).
+        app.prefetch_in_flight.remove(&1);
+
+        // A couple of frames: the liveness net must re-request the image.
+        for _ in 0..600 {
+            app.drain_messages(&ctx);
+            if app.installed_idx == Some(1) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("selected image never installed after a lost reply");
     }
 }

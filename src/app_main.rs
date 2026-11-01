@@ -89,10 +89,15 @@ pub struct App {
     // async
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
-    load_token: u64,
     files_gen: u64,
-    in_flight: HashSet<usize>,
-    pending_load: Option<(usize, u64)>,
+    /// Indices with a `Msg::Loaded` job running ("show this image now").
+    load_in_flight: HashSet<usize>,
+    /// Indices with a `Msg::Prefetch` job running (a neighbour warmed up in
+    /// the background; its frames are cached, or installed directly if the
+    /// selection has reached it meanwhile).
+    prefetch_in_flight: HashSet<usize>,
+    /// The index whose frames we want on screen, or `None` when satisfied.
+    pending_load: Option<usize>,
     prefetch_keys: Vec<usize>,
     prefetch: HashMap<usize, Frames>,
     origins: HashMap<String, (u32, u32)>,
@@ -126,6 +131,10 @@ pub struct App {
     // list mode
     list_preview: Option<TextureHandle>,
     list_pending: i64,
+    /// Index whose pixels are currently in `list_preview`, or `None` when the
+    /// pane is empty.  Lets the preview re-request itself when a reply is
+    /// lost, so the pane cannot freeze on a stale image.
+    list_preview_idx: Option<usize>,
     /// When set, scroll the list so this file becomes visible (tkiv.py
     /// calls listbox.see(pos) after every selection change).
     list_scroll_to: Option<usize>,
@@ -137,6 +146,11 @@ pub struct App {
     // textures
     img_tex: Option<TextureHandle>,
     img_tex_key: Option<String>,
+    /// Index of the file whose frames are currently installed (i.e. what the
+    /// picture area actually shows).  Used to detect a load that was
+    /// requested but never delivered, which used to freeze the image while
+    /// the status bar kept advancing.
+    installed_idx: Option<usize>,
 
     // lazy scan
     lazy_scan_active: bool,
@@ -191,9 +205,49 @@ impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         opts: Opts,
+        files: Vec<FileEntry>,
+        scan_paths: Vec<String>,
+        pre_select: Option<Vec<String>>,
+    ) -> App {
+        // Floating windows (select mode / --floating-window): tkiv.py sets
+        // `-type dialog` and `-topmost` and sizes to screen-100 +50+50.
+        // The window is created hidden (see run_app) so the dialog window
+        // type is registered BEFORE the window manager maps it.
+        let (pending_show, pending_geometry) =
+            if opts.purpose == Purpose::Select || opts.floating_window {
+                match crate::floating::setup_dialog(cc) {
+                    Some(screen) => (true, Some(crate::floating::floating_geometry(screen))),
+                    // Wayland or no libX11: still show the hidden window,
+                    // the dialog type just cannot be set (like Tk).
+                    None => (true, None),
+                }
+            } else {
+                (false, None)
+            };
+        Self::new_inner(opts, files, scan_paths, pre_select, pending_show, pending_geometry)
+    }
+
+    /// The real constructor.  `pending_show`/`pending_geometry` describe a
+    /// hidden floating window that must be mapped on the first frame; they
+    /// are `None` for the ordinary viewer and for headless (test) use.
+    pub fn new_inner(
+        opts: Opts,
+        files: Vec<FileEntry>,
+        scan_paths: Vec<String>,
+        pre_select: Option<Vec<String>>,
+        pending_show: bool,
+        pending_geometry: Option<(f32, f32, f32, f32)>,
+    ) -> App {
+        Self::build(opts, files, scan_paths, pre_select, pending_show, pending_geometry)
+    }
+
+    fn build(
+        opts: Opts,
         mut files: Vec<FileEntry>,
         scan_paths: Vec<String>,
         pre_select: Option<Vec<String>>,
+        pending_show: bool,
+        pending_geometry: Option<(f32, f32, f32, f32)>,
     ) -> App {
         let cfg = load_config();
         let behavior = cfg.merged_behavior();
@@ -260,21 +314,6 @@ impl App {
         };
 
         let (tx, rx) = channel::<Msg>();
-        // Floating windows (select mode / --floating-window): tkiv.py sets
-        // `-type dialog` and `-topmost` and sizes to screen-100 +50+50.
-        // The window is created hidden (see run_app) so the dialog window
-        // type is registered BEFORE the window manager maps it.
-        let (pending_show, pending_geometry) =
-            if opts.purpose == Purpose::Select || opts.floating_window {
-                match crate::floating::setup_dialog(cc) {
-                    Some(screen) => (true, Some(crate::floating::floating_geometry(screen))),
-                    // Wayland or no libX11: still show the hidden window,
-                    // the dialog type just cannot be set (like Tk).
-                    None => (true, None),
-                }
-            } else {
-                (false, None)
-            };
         let ss_delay_ds = if opts.ss_on {
             opts.ss_delay_decisec
         } else {
@@ -320,9 +359,9 @@ impl App {
             next_slide_at: None,
             tx,
             rx,
-            load_token: 0,
             files_gen: 0,
-            in_flight: HashSet::new(),
+            load_in_flight: HashSet::new(),
+            prefetch_in_flight: HashSet::new(),
             pending_load: None,
             prefetch_keys: vec![],
             prefetch: HashMap::new(),
@@ -343,10 +382,12 @@ impl App {
             gallery_last_layout: (0, 0.0),
             list_preview: None,
             list_pending: -1,
+            list_preview_idx: None,
             list_scroll_to: None,
             list_label_cache: (0, 0, String::new(), 0.0),
             img_tex: None,
             img_tex_key: None,
+            installed_idx: None,
             lazy_scan_active: false,
             fullscreen: opts.fullscreen,
             quitting: false,
@@ -379,11 +420,10 @@ impl App {
                     app.gallery_scroll_to = Some(app.fileidx);
                 }
                 Mode::List => {
-                    app.list_pending = -2; // trigger preview load
+                    app.invalidate_list_preview();
                 }
             }
         }
-        let _ = cc;
         app
     }
 
@@ -548,11 +588,12 @@ impl App {
         self.markidx = self.fileidx;
         self.alternate = self.fileidx;
         self.files_gen += 1;
-        self.load_token += 1;
         self.prefetch.clear();
         self.prefetch_keys.clear();
-        self.in_flight.clear();
+        self.load_in_flight.clear();
+        self.prefetch_in_flight.clear();
         self.pending_load = None;
+        self.installed_idx = None;
         self.thumb_in_flight.clear();
         self.mtimes.clear();
         self.gallery_aspect_cache = None;
@@ -570,7 +611,7 @@ impl App {
             _ => {
                 self.gallery_scroll_to = Some(self.fileidx);
                 if self.mode == Mode::List {
-                    self.list_pending = -2;
+                    self.invalidate_list_preview();
                 }
             }
         }
@@ -578,18 +619,39 @@ impl App {
 
     // ------------------------------------------------------------ loading
 
+    /// Ask for the frames of `n` to be shown.
+    ///
+    /// The bookkeeping here is what keeps the picture in sync with the
+    /// selection, and it has to satisfy one invariant:
+    ///
+    /// **every requested index must end up either installed or queued.**
+    ///
+    /// The original implementation broke that in two ways, both of which
+    /// present as "the status bar moves but the image never changes":
+    ///
+    /// 1. it bumped the request token *before* checking `in_flight`, and the
+    ///    reply was then accepted only if that token was still current, so
+    ///    deferring to a job that was already decoding `n` invalidated the
+    ///    very job it relied on;
+    /// 2. `in_flight` conflated the two kinds of background job.  A job
+    ///    started by `submit_prefetch` answers with `Msg::Prefetch`, which
+    ///    carries no token and is accepted only when `pending_load` matches;
+    ///    a job started here answers with the token it captured.  "Already in
+    ///    flight" therefore cannot be treated uniformly.
+    ///
+    /// So: adopt a running job only when we know it will deliver for `n`,
+    /// and re-arm the request instead of invalidating it.
     pub fn load_image_async(&mut self, n: usize) -> bool {
         if n >= self.files.len() {
             return false;
         }
         self.next_frame_at = None;
         self.next_slide_at = None;
-        self.load_token += 1;
-        let token = self.load_token;
         if n != self.fileidx {
             self.alternate = self.fileidx;
             self.fileidx = n;
         }
+        // Already have the pixels: install straight away.
         if let Some(fr) = self.prefetch_remove(n) {
             let frames = fr.0;
             let delays = fr.1;
@@ -598,24 +660,53 @@ impl App {
             self.prefetch_neighbors(n);
             return true;
         }
+        // Already asking for exactly this index and a worker is running for
+        // it: wait for that reply.
+        if self.pending_load == Some(n) {
+            if self.load_in_flight.contains(&n) {
+                return true;
+            }
+            // The record survived but the job is gone (it was answered and
+            // rejected, or the list changed under it); fall through and
+            // restart it.
+        }
+        // A prefetch job for `n` is already queued/running: it will answer
+        // with `Msg::Prefetch`, which is accepted for the selected index.
+        if self.prefetch_in_flight.contains(&n) {
+            self.pending_load = Some(n);
+            return true;
+        }
         let path = self.files[n].path.clone();
         let max_dim = self.cfg_behavior["max_load_dim"] as u32;
         let gen = self.files_gen;
         let tx = self.tx.clone();
-        self.pending_load = Some((n, token));
-        if !self.in_flight.insert(n) {
-            return true;
-        }
+        self.pending_load = Some(n);
+        self.load_in_flight.insert(n);
         self.spawn_limited(move || {
             let res = images::load_frames(&path, Some(max_dim));
-            let _ = tx.send(Msg::Loaded {
-                token,
-                idx: n,
-                gen,
-                res,
-            });
+            let _ = tx.send(Msg::Loaded { idx: n, gen, res });
         });
         true
+    }
+
+    /// Liveness net for image mode.
+    ///
+    /// After every drain pass, make sure the selected image is either on
+    /// screen or being decoded.  Without this, a reply that is lost or
+    /// rejected leaves the picture frozen while the selection (status bar)
+    /// keeps advancing -- the reported bug.
+    fn ensure_current_load(&mut self) {
+        if self.mode != Mode::Image || self.files.is_empty() || self.quitting {
+            return;
+        }
+        let idx = self.fileidx.min(self.files.len() - 1);
+        if self.installed_idx == Some(idx) {
+            return;
+        }
+        if self.load_in_flight.contains(&idx) || self.prefetch_in_flight.contains(&idx) {
+            return;
+        }
+        let _ = self.load_image_async(idx);
     }
 
     fn spawn_limited(&self, f: impl FnOnce() + Send + 'static) {
@@ -649,6 +740,7 @@ impl App {
         }
         self.pan = Vec2::ZERO;
         self.img_tex = None;
+        self.installed_idx = Some(n);
         if let Ok(meta) = std::fs::metadata(&self.files[n].path) {
             if let Ok(m) = meta.modified() {
                 if let Ok(d) = m.duration_since(std::time::UNIX_EPOCH) {
@@ -688,7 +780,11 @@ impl App {
     }
 
     fn submit_prefetch(&mut self, n: usize) {
-        if self.prefetch.contains_key(&n) || n == self.fileidx || self.in_flight.contains(&n) {
+        if self.prefetch.contains_key(&n)
+            || n == self.fileidx
+            || self.prefetch_in_flight.contains(&n)
+            || self.load_in_flight.contains(&n)
+        {
             return;
         }
         if n >= self.files.len() {
@@ -698,7 +794,7 @@ impl App {
         let max_dim = self.cfg_behavior["max_load_dim"] as u32;
         let gen = self.files_gen;
         let tx = self.tx.clone();
-        self.in_flight.insert(n);
+        self.prefetch_in_flight.insert(n);
         self.spawn_limited(move || {
             let res = images::load_frames(&path, Some(max_dim));
             let _ = tx.send(Msg::Prefetch { idx: n, gen, res });
@@ -721,7 +817,7 @@ impl App {
                 self.fileidx = n;
                 self.gallery_scroll_to = Some(n);
                 if self.mode == Mode::List {
-                    self.list_pending = -2;
+                    self.invalidate_list_preview();
                 }
                 self.persist_index();
                 true
@@ -902,8 +998,12 @@ impl App {
         self.files_gen += 1;
         self.prefetch.clear();
         self.prefetch_keys.clear();
-        self.in_flight.clear();
+        self.load_in_flight.clear();
+        self.prefetch_in_flight.clear();
         self.pending_load = None;
+        // Indices shifted down by one, so whatever was on screen no longer
+        // describes this index.
+        self.installed_idx = self.installed_idx.map(|i| if i > n { i - 1 } else { i });
         self.thumb_in_flight.clear();
         self.thumbs = std::mem::take(&mut self.thumbs)
             .into_iter()
@@ -1336,7 +1436,7 @@ impl App {
             _ => {
                 self.gallery_scroll_to = Some(self.fileidx);
                 if self.mode == Mode::List {
-                    self.list_pending = -2;
+                    self.invalidate_list_preview();
                 }
             }
         }
@@ -1489,7 +1589,7 @@ impl App {
                 }
             }
             Mode::Gallery => self.gallery_scroll_to = Some(self.fileidx),
-            Mode::List => self.list_pending = -2,
+            Mode::List => self.invalidate_list_preview(),
         }
     }
 
